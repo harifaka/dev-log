@@ -666,7 +666,7 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
             )
         except ImportError as exc:
             LOGGER.warning("ReportLab not available: %s", exc)
-            return jsonify({"error": "PDF generation requires reportlab. Install with: pip install reportlab"}), 503
+            return jsonify({"error": "PDF generation requires ReportLab. Install with: pip install reportlab"}), 503
 
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(
@@ -691,10 +691,10 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
         ]
 
         fault_levels = {"WARNING", "ERROR", "CRITICAL"}
-        warnings = [e for e in events if e.get("level") in fault_levels]
-        if warnings:
+        fault_events = [e for e in events if e.get("level") in fault_levels]
+        if fault_events:
             story.append(Paragraph("Degraded Services", styles["Heading2"]))
-            for w in warnings:
+            for w in fault_events:
                 story.append(Paragraph(f"\u2022 {w.get('message', '')}", body))
             story.append(Spacer(1, 0.4 * cm))
 
