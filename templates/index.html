@@ -94,14 +94,14 @@
     window.vis = window.vis || {};
     window.vis.DataSet = class {
       constructor(items) {
-        this.items = new Map((items || []).filter(item => item && item.id != null)
+        this.items = new Map((items ?? []).filter(item => item && item.id != null)
           .map(item => [item.id, item]));
       }
       get() { return [...this.items.values()]; }
     };
     window.vis.Network = class {
       constructor(container, data) { this.container = container; this.data = data; this.handlers = {}; this.render(); }
-      on(name, handler) { (this.handlers[name] ||= []).push(handler); }
+      on(name, handler) { (this.handlers[name] ??= []).push(handler); }
       emit(name, params) { (this.handlers[name] || []).forEach(handler => handler(params)); }
       render() {
         this.container.replaceChildren();
@@ -214,7 +214,7 @@
       if (!network) {
         network = new vis.Network(networkEl, graphData, {});
         network.on('click', params => {
-          if (params.nodes && params.nodes.length) isolateSpecificServiceLogsTerminalView(params.nodes[0]);
+          if (params.nodes?.length) isolateSpecificServiceLogsTerminalView(params.nodes[0]);
           else resetTerminalView();
         });
         network.on('doubleClick', resetTerminalView);

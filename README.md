@@ -58,7 +58,8 @@ pyinstaller --clean --noconfirm --onefile --windowed \
   --add-data "templates:templates" --name "dev-log" app.py
 ```
 
-On Windows, use the required PyInstaller separator:
+On Windows, use the required semicolon separator (`;`); Unix-like systems use
+the colon separator (`:`):
 
 ```powershell
 pyinstaller --noconfirm --onefile --windowed --add-data "templates;templates" --name "dev-log" app.py

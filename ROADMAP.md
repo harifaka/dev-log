@@ -33,7 +33,7 @@
 - Raw chronological event console with service-level drill-down.
 - `/api/report/pdf` endpoint: ReportLab-formatted RCA action plan with event timeline table.
 - Frontend PDF download button and embedded Vis.js-compatible network graph with
-  live status colours and terminal drill-down.
+  live status colors and terminal drill-down.
 
 ## Phase 6 — hardening (complete)
 
