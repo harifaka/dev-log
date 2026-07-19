@@ -21,7 +21,7 @@ from typing import Any
 from flask import Flask, jsonify, render_template
 from waitress import serve
 
-LOGGER = logging.getLogger("dev_log")
+LOGGER = logging.getLogger("dev-log")
 HOST = "127.0.0.1"
 PORT = 5050
 # Empirically reliable minimum for Waitress to bind on slower desktop systems.
@@ -88,6 +88,12 @@ def load_runtime_config() -> RuntimeConfig:
         raise ConfigurationError(
             "config.json must define string 'active_environment', object 'server', and object 'environments'."
         )
+    try:
+        port = int(server.get("port", PORT))
+    except (TypeError, ValueError) as exc:
+        raise ConfigurationError("config.json server.port must be an integer from 1 to 65535.") from exc
+    if not 1 <= port <= 65535:
+        raise ConfigurationError("config.json server.port must be an integer from 1 to 65535.")
     if active not in environments:
         raise ConfigurationError(
             f"Active environment '{active}' is not defined in config.json."

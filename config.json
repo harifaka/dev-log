@@ -41,7 +41,7 @@
       "mock_data": true,
       "oracle": {
         "enabled": false,
-        "dsn": "oracle-staging.example:1521/APP",
+        "dsn": "oracle-staging.example.invalid:1521/APP",
         "user": "replace-with-staging-user",
         "password": "",
         "pool_min": 1,
@@ -56,13 +56,13 @@
       },
       "graylog": {
         "enabled": false,
-        "url": "https://graylog-staging.example/api",
+        "url": "https://graylog-staging.example.invalid/api",
         "api_token": "",
         "verify_tls": true
       },
       "rabbitmq": {
         "enabled": false,
-        "url": "amqp://rabbitmq-staging.example/%2F",
+        "url": "amqp://rabbitmq-staging.example.invalid/%2F",
         "queues": ["app.dlq"]
       }
     },
@@ -71,7 +71,7 @@
       "mock_data": false,
       "oracle": {
         "enabled": false,
-        "dsn": "oracle-production.example:1521/APP",
+        "dsn": "oracle-production.example.invalid:1521/APP",
         "user": "replace-with-production-user",
         "password": "",
         "pool_min": 1,
@@ -86,13 +86,13 @@
       },
       "graylog": {
         "enabled": false,
-        "url": "https://graylog-production.example/api",
+        "url": "https://graylog-production.example.invalid/api",
         "api_token": "",
         "verify_tls": true
       },
       "rabbitmq": {
         "enabled": false,
-        "url": "amqp://rabbitmq-production.example/%2F",
+        "url": "amqp://rabbitmq-production.example.invalid/%2F",
         "queues": ["app.dlq"]
       }
     }

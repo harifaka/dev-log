@@ -25,9 +25,9 @@ jobs:
       - name: Create release on every main push
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: dev-log-${{ github.run_number }}
           RELEASE_SHA: ${{ github.sha }}
         run: |
-          gh release create "$env:RELEASE_TAG" "dist/dev-log.exe" `
-            --title "dev-log $env:RELEASE_TAG" `
+          $releaseTag = "dev-log-{0:yyyyMMdd-HHmmss}" -f (Get-Date).ToUniversalTime()
+          gh release create "$releaseTag" "dist/dev-log.exe" `
+            --title "dev-log $releaseTag" `
             --notes "Automated portable Windows build from $($env:RELEASE_SHA.Substring(0,7))."
