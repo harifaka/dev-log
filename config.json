@@ -1,0 +1,110 @@
+{
+  "active_environment": "development",
+  "server": {
+    "host": "127.0.0.1",
+    "port": 5050,
+    "request_timeout_seconds": 30
+  },
+  "environments": {
+    "development": {
+      "description": "Local developer mocks; no production credentials belong here.",
+      "mock_data": true,
+      "oracle": {
+        "enabled": false,
+        "dsn": "localhost:1521/FREEPDB1",
+        "user": "replace-with-local-user",
+        "password": "",
+        "pool_min": 1,
+        "pool_max": 3
+      },
+      "mssql": {
+        "enabled": false,
+        "connection_string": "DRIVER={ODBC Driver 18 for SQL Server};SERVER=localhost;DATABASE=devlog;Encrypt=yes;TrustServerCertificate=yes;",
+        "user": "replace-with-local-user",
+        "password": "",
+        "pool_size": 3
+      },
+      "graylog": {
+        "enabled": false,
+        "url": "http://localhost:9000/api",
+        "api_token": "",
+        "verify_tls": true
+      },
+      "rabbitmq": {
+        "enabled": false,
+        "url": "amqp://localhost:5672/%2F",
+        "queues": ["dev-log"]
+      }
+    },
+    "staging": {
+      "description": "Staging connector placeholders; use an external config override.",
+      "mock_data": true,
+      "oracle": {
+        "enabled": false,
+        "dsn": "oracle-staging.example.invalid:1521/APP",
+        "user": "replace-with-staging-user",
+        "password": "",
+        "pool_min": 1,
+        "pool_max": 5
+      },
+      "mssql": {
+        "enabled": false,
+        "connection_string": "DRIVER={ODBC Driver 18 for SQL Server};SERVER=sql-staging.example.invalid;DATABASE=app;Encrypt=yes;",
+        "user": "replace-with-staging-user",
+        "password": "",
+        "pool_size": 5
+      },
+      "graylog": {
+        "enabled": false,
+        "url": "https://graylog-staging.example.invalid/api",
+        "api_token": "",
+        "verify_tls": true
+      },
+      "rabbitmq": {
+        "enabled": false,
+        "url": "amqp://rabbitmq-staging.example.invalid/%2F",
+        "queues": ["app.dlq"]
+      }
+    },
+    "production": {
+      "description": "Production connector placeholders; never commit real secrets.",
+      "mock_data": false,
+      "oracle": {
+        "enabled": false,
+        "dsn": "oracle-production.example.invalid:1521/APP",
+        "user": "replace-with-production-user",
+        "password": "",
+        "pool_min": 1,
+        "pool_max": 10
+      },
+      "mssql": {
+        "enabled": false,
+        "connection_string": "DRIVER={ODBC Driver 18 for SQL Server};SERVER=sql-production.example.invalid;DATABASE=app;Encrypt=yes;",
+        "user": "replace-with-production-user",
+        "password": "",
+        "pool_size": 10
+      },
+      "graylog": {
+        "enabled": false,
+        "url": "https://graylog-production.example.invalid/api",
+        "api_token": "",
+        "verify_tls": true
+      },
+      "rabbitmq": {
+        "enabled": false,
+        "url": "amqp://rabbitmq-production.example.invalid/%2F",
+        "queues": ["app.dlq"]
+      }
+    }
+  },
+  "services": [
+    {"id": "gateway", "name": "API Gateway", "order": 1},
+    {"id": "orders", "name": "Order Service", "order": 2},
+    {"id": "payments", "name": "Payment Service", "order": 3},
+    {"id": "inventory", "name": "Inventory Service", "order": 4},
+    {"id": "shipping", "name": "Shipping Service", "order": 5},
+    {"id": "notifications", "name": "Notification Service", "order": 6},
+    {"id": "audit", "name": "Audit Service", "order": 7},
+    {"id": "reconciliation", "name": "Reconciliation Service", "order": 8}
+  ]
+}

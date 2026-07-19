@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>dev-log · transaction investigator</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b1220; --panel:#111c2e; --line:#263852; --text:#e5edf7; --muted:#8da1b9; --accent:#38bdf8; }
+    * { box-sizing:border-box; } body { margin:0; font:14px system-ui,sans-serif; color:var(--text); background:var(--bg); }
+    header { padding:22px 28px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; }
+    h1,h2,p { margin:0; } h1 { font-size:22px; } h2 { font-size:15px; } .muted { color:var(--muted); }
+    main { max-width:1400px; margin:auto; padding:24px; } .toolbar,.panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:18px; }
+    .toolbar { display:flex; flex-wrap:wrap; gap:12px; align-items:end; margin-bottom:18px; } label { display:grid; gap:6px; color:var(--muted); }
+    input,select,button { border:1px solid var(--line); border-radius:6px; padding:9px 12px; color:var(--text); background:#0d1727; } button { cursor:pointer; background:#075985; border-color:#0ea5e9; font-weight:600; }
+    .error { width:100%; padding:12px; color:#fecaca; border:1px solid #991b1b; background:#450a0a; border-radius:6px; }
+    .graph { min-height:280px; display:grid; place-items:center; border:1px dashed var(--line); margin-top:15px; color:var(--muted); }
+    .nodes { display:flex; flex-wrap:wrap; gap:10px; justify-content:center; } .node { padding:12px; border-radius:8px; border:1px solid #64748b; background:#334155; color:white; }
+    .node.success { background:#166534; border-color:#4ade80; } .node.fault { background:#991b1b; border-color:#f87171; } .node.skipped { background:#334155; }
+    .console { margin-top:18px; min-height:220px; padding:16px; background:#020617; color:#a7f3d0; font:12px ui-monospace,monospace; white-space:pre-wrap; overflow:auto; }
+    .status { color:#86efac; } .grid { display:grid; grid-template-columns:2fr 1fr; gap:18px; } @media(max-width:800px) { .grid { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div><h1>dev-log</h1><p class="muted">Hybrid transaction tracing and RCA hub</p></div>
+    <span class="status" role="status"><span aria-hidden="true">●</span> Connected to local loopback</span>
+  </header>
+  <main>
+    {% if config_error %}<div class="error" role="alert"><strong>Configuration unavailable.</strong> {{ config_error }} Edit config.json and reload.</div>{% endif %}
+    <form class="toolbar" aria-label="Investigation controls">
+      <label for="environment">Environment<select id="environment" name="environment">{% for name in (runtime.environments if runtime else {}) %}<option>{{ name }}</option>{% endfor %}</select></label>
+      <label for="business-id">Business identifier<input id="business-id" name="business_id" placeholder="Order ID or payload ID" required></label>
+      <button type="button" disabled aria-describedby="investigate-help">Investigate</button>
+      <span id="investigate-help" class="muted">Correlation engine will be enabled in Phase 4.</span>
+    </form>
+    <div class="grid">
+      <section class="panel"><h2>Transaction pipeline</h2><div class="graph" aria-label="Vis.js network graph placeholder">
+        <div class="nodes">{% for service in (runtime.services if runtime else []) %}<button class="node skipped" type="button" disabled>{{ service.name }}</button>{% endfor %}</div>
+      </div><div class="console" aria-label="Log console">Select a service node to view its raw timeline logs.</div></section>
+      <aside class="panel"><h2>RCA action plan</h2><p class="muted" style="margin-top:12px">No investigation loaded. PDF generation is enabled after correlation results are available.</p></aside>
+    </div>
+  </main>
+</body>
+</html>
