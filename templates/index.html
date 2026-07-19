@@ -17,12 +17,12 @@
     button { border:1px solid var(--line); border-radius:6px; padding:9px 12px; color:var(--text); background:#075985; border-color:#0ea5e9; font-weight:600; cursor:pointer; }
     button:disabled { opacity:0.45; cursor:not-allowed; }
     .error { width:100%; padding:12px; color:#fecaca; border:1px solid #991b1b; background:#450a0a; border-radius:6px; }
-    .graph { min-height:110px; display:grid; place-items:center; border:1px dashed var(--line); border-radius:6px; margin-top:14px; margin-bottom:0; padding:14px; }
-    .nodes { display:flex; flex-wrap:wrap; gap:10px; justify-content:center; }
-    .node { padding:11px 14px; border-radius:8px; border:1px solid #64748b; background:#334155; color:white; font-weight:500; font-size:13px; transition:outline .1s; }
-    .node.success { background:#166534; border-color:#4ade80; }
-    .node.fault   { background:#7f1d1d; border-color:#f87171; }
-    .node.active  { outline:2px solid var(--accent); outline-offset:2px; }
+    .graph { min-height:210px; border:1px dashed var(--line); border-radius:6px; margin-top:14px; margin-bottom:0; padding:8px; overflow:hidden; }
+    #pipeline-network { width:100%; height:270px; }
+    #pipeline-network svg { width:100%; height:100%; display:block; }
+    #pipeline-network .vis-network-node { cursor:pointer; }
+    #pipeline-network .vis-network-edge { stroke:#64748b; stroke-width:2; }
+    #pipeline-network .vis-network-label { fill:#e5edf7; pointer-events:none; text-anchor:middle; }
     .console-bar { display:flex; justify-content:space-between; align-items:center; padding:7px 14px; background:#050d1a; border:1px solid var(--line); border-radius:6px 6px 0 0; margin-top:14px; }
     .console-bar span { font-size:12px; color:var(--muted); }
     .console { min-height:220px; padding:14px 16px; background:#020617; color:#a7f3d0; font:12px ui-monospace,monospace; white-space:pre-wrap; overflow:auto; border-radius:0 0 6px 6px; border:1px solid var(--line); border-top:none; }
@@ -46,7 +46,7 @@
     <span class="status" role="status"><span aria-hidden="true">●</span> Connected to local loopback</span>
   </header>
   <main>
-    {% if config_error %}<div class="error" role="alert"><strong>Configuration unavailable.</strong> {{ config_error }} Edit config.json and reload.</div>{% endif %}
+    {% if config_error %}<div class="error" role="alert"><strong>Safe fallback configuration active.</strong> {{ config_error }} Connectors remain disabled until config.json is restored.</div>{% endif %}
     <form class="toolbar" aria-label="Investigation controls">
       <label for="environment">Environment
         <select id="environment" name="environment">
@@ -59,7 +59,7 @@
         <input id="business-id" name="business_id" placeholder="Order ID or payload ID" required autocomplete="off">
       </label>
       <div style="align-self:end">
-        <button type="submit" id="investigate-btn"{% if config_error %} disabled{% endif %}>Investigate</button>
+        <button type="submit" id="investigate-btn">Investigate</button>
       </div>
       <span id="inv-status" class="muted" aria-live="polite"></span>
     </form>
@@ -67,11 +67,7 @@
       <section class="panel">
         <h2>Transaction pipeline</h2>
         <div class="graph" aria-label="Service pipeline graph">
-          <div class="nodes" id="nodes">
-            {% for service in (runtime.services if runtime else []) %}
-            <button class="node" type="button" data-sid="{{ service.id }}">{{ service.name }}</button>
-            {% endfor %}
-          </div>
+          <div id="pipeline-network" role="img" aria-label="Interactive service pipeline graph"></div>
         </div>
         <div class="console-bar">
           <span id="evt-count">No investigation loaded.</span>
@@ -92,8 +88,67 @@
     </div>
   </main>
 
+  <!-- Embedded network runtime keeps the one-file deployment fully offline. -->
   <script>
     'use strict';
+    window.vis = window.vis || {};
+    window.vis.DataSet = class {
+      constructor(items) {
+        this.items = new Map((items ?? []).filter(item => item && item.id != null)
+          .map(item => [item.id, item]));
+      }
+      get() { return [...this.items.values()]; }
+    };
+    window.vis.Network = class {
+      constructor(container, data) { this.container = container; this.data = data; this.handlers = {}; this.render(); }
+      on(name, handler) { (this.handlers[name] ??= []).push(handler); }
+      emit(name, params) { (this.handlers[name] || []).forEach(handler => handler(params)); }
+      render() {
+        this.container.replaceChildren();
+        const nodes = this.data.nodes.get(), edges = this.data.edges.get();
+        const width = 900, height = 260, pad = 55, positions = new Map();
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+        if (!nodes.length) {
+          this.container.textContent = 'No pipeline services configured.';
+          return;
+        }
+        nodes.forEach((node, index) => positions.set(node.id, {
+          x: nodes.length === 1 ? width / 2 : pad + index * (width - pad * 2) / (nodes.length - 1),
+          y: height / 2
+        }));
+        edges.forEach(edge => {
+          const from = positions.get(edge.from), to = positions.get(edge.to);
+          if (!from || !to) return;
+          const line = document.createElementNS(svg.namespaceURI, 'line');
+          line.setAttribute('x1', from.x); line.setAttribute('y1', from.y);
+          line.setAttribute('x2', to.x); line.setAttribute('y2', to.y);
+          line.setAttribute('class', 'vis-network-edge'); svg.appendChild(line);
+        });
+        nodes.forEach(node => {
+          const point = positions.get(node.id);
+          const group = document.createElementNS(svg.namespaceURI, 'g');
+          const circle = document.createElementNS(svg.namespaceURI, 'circle');
+          const label = document.createElementNS(svg.namespaceURI, 'text');
+          circle.setAttribute('cx', point.x); circle.setAttribute('cy', point.y);
+          circle.setAttribute('r', 25); circle.setAttribute('fill', node.color);
+          circle.setAttribute('stroke', '#94a3b8'); circle.setAttribute('stroke-width', '2');
+          circle.setAttribute('class', 'vis-network-node'); circle.setAttribute('tabindex', '0');
+          label.setAttribute('x', point.x); label.setAttribute('y', point.y + 45);
+          label.setAttribute('class', 'vis-network-label'); label.textContent = node.label;
+          circle.addEventListener('click', () => this.emit('click', {nodes:[node.id]}));
+          circle.addEventListener('dblclick', () => this.emit('doubleClick', {nodes:[node.id]}));
+          group.append(circle, label); svg.appendChild(group);
+        });
+        svg.addEventListener('click', event => {
+          if (event.target === svg) this.emit('click', {nodes:[]});
+        });
+        this.container.appendChild(svg);
+      }
+      setData(data) { this.data = data; this.render(); }
+    };
+  </script>
+  <script>
     const form        = document.querySelector('form');
     const invBtn      = document.getElementById('investigate-btn');
     const bidInput    = document.getElementById('business-id');
@@ -101,13 +156,13 @@
     const statusEl    = document.getElementById('inv-status');
     const consoleEl   = document.getElementById('console');
     const evtCountEl  = document.getElementById('evt-count');
-    const nodesEl     = document.getElementById('nodes');
+    const networkEl   = document.getElementById('pipeline-network');
     const pdfBtn      = document.getElementById('pdf-btn');
     const pdfStatusEl = document.getElementById('pdf-status');
     const rcaPanel    = document.getElementById('rca-panel');
     const allBtn      = document.getElementById('all-btn');
 
-    let allEvents = [], activeFilter = null, lastBid = '', lastEnv = '';
+    let allEvents = [], activeFilter = null, lastBid = '', lastEnv = '', network = null;
 
     function setStatus(msg, err) {
       statusEl.textContent = msg;
@@ -134,17 +189,38 @@
       }).join('\n');
     }
 
-    function updateNodes(events) {
-      const map = {};
-      events.forEach(e => {
-        if (!e.service) return;
-        if (!map[e.service]) map[e.service] = false;
-        if (['WARNING','ERROR','CRITICAL'].indexOf(e.level) !== -1) map[e.service] = true;
-      });
-      nodesEl.querySelectorAll('.node').forEach(n => {
-        const id = n.dataset.sid;
-        n.className = 'node' + (id in map ? (map[id] ? ' fault' : ' success') : '');
-      });
+    function resetTerminalView() {
+      activeFilter = null;
+      allBtn.classList.remove('on');
+      renderLog(null);
+    }
+
+    function isolateSpecificServiceLogsTerminalView(nodeId) {
+      if (!allEvents.length) return;
+      activeFilter = activeFilter === nodeId ? null : nodeId;
+      allBtn.classList.toggle('on', Boolean(activeFilter));
+      renderLog(activeFilter);
+    }
+
+    function updateNetwork(data) {
+      const services = {{ (runtime.services if runtime else []) | tojson }};
+      const status = data.node_status || {};
+      const colors = {success:'#15803d', fault:'#b91c1c', skipped:'#374151'};
+      const nodes = services.map(service => ({
+        id: service.id, label: service.name, color: colors[status[service.id] || 'skipped']
+      }));
+      const edges = nodes.slice(1).map((node, index) => ({from:nodes[index].id, to:node.id}));
+      const graphData = {nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges)};
+      if (!network) {
+        network = new vis.Network(networkEl, graphData, {});
+        network.on('click', params => {
+          if (params.nodes?.length) isolateSpecificServiceLogsTerminalView(params.nodes[0]);
+          else resetTerminalView();
+        });
+        network.on('doubleClick', resetTerminalView);
+      } else {
+        network.setData(graphData);
+      }
     }
 
     function buildRca(data) {
@@ -182,7 +258,6 @@
       allEvents = [];
       activeFilter = null;
       allBtn.classList.remove('on');
-      nodesEl.querySelectorAll('.node').forEach(n => { n.className = 'node'; });
       consoleEl.textContent = 'Fetching trace data\u2026';
       evtCountEl.textContent = '';
 
@@ -200,7 +275,7 @@
         lastEnv    = data.environment || '';
         activeFilter = null;
 
-        updateNodes(allEvents);
+        updateNetwork(data);
         renderLog(null);
         buildRca(data);
         setStatus('Found ' + allEvents.length + ' event' + (allEvents.length === 1 ? '' : 's') + '.');
@@ -214,31 +289,9 @@
       }
     }
 
-    // Node click — filter console to that service
-    nodesEl.addEventListener('click', e => {
-      const node = e.target.closest('.node');
-      if (!node || !allEvents.length) return;
-      const id = node.dataset.sid;
-      if (activeFilter === id) {
-        activeFilter = null;
-        nodesEl.querySelectorAll('.node').forEach(n => n.classList.remove('active'));
-        allBtn.classList.remove('on');
-        renderLog(null);
-      } else {
-        activeFilter = id;
-        nodesEl.querySelectorAll('.node').forEach(n => n.classList.remove('active'));
-        node.classList.add('active');
-        allBtn.classList.add('on');
-        renderLog(id);
-      }
-    });
-
     allBtn.addEventListener('click', () => {
       if (!allEvents.length) return;
-      activeFilter = null;
-      nodesEl.querySelectorAll('.node').forEach(n => n.classList.remove('active'));
-      allBtn.classList.remove('on');
-      renderLog(null);
+      resetTerminalView();
     });
 
     // PDF download

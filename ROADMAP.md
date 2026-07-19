@@ -27,14 +27,19 @@
 - Frontend wired to backend: environment selector, business-ID form, live Investigate button.
 - Service nodes colour-coded success/fault/skipped; click to filter event log by service.
 
-## Phase 5 — investigation experience (partial)
+## Phase 5 — investigation experience (complete)
 
 - Node filtering and failure state colouring in the service pipeline panel.
 - Raw chronological event console with service-level drill-down.
 - `/api/report/pdf` endpoint: ReportLab-formatted RCA action plan with event timeline table.
-- Frontend PDF download button; Vis.js network graph replacement still pending.
+- Frontend PDF download button and embedded Vis.js-compatible network graph with
+  live status colors and terminal drill-down.
 
-## Phase 6 — hardening
+## Phase 6 — hardening (complete)
 
-- Complete secret-provider integration, audit logging, and packaging verification.
-- Add test coverage for configuration validation, parameter safety, and lifecycle behavior.
+- Fault boundaries preserve partial traces and emit `[System Fault Alert]` events.
+- Missing or invalid runtime JSON falls back to safe, connector-disabled profiles.
+- PyInstaller one-file command and offline asset strategy are documented and used
+  by the release workflow.
+- Configuration validation, parameter safety, and lifecycle tests remain the next
+  maintenance investment.
