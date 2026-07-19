@@ -32,7 +32,7 @@
       },
       "rabbitmq": {
         "enabled": false,
-        "url": "******localhost:5672/%2F",
+        "url": "amqp://localhost:5672/%2F",
         "queues": ["dev-log"]
       }
     },
@@ -62,7 +62,7 @@
       },
       "rabbitmq": {
         "enabled": false,
-        "url": "******rabbitmq-staging.example.invalid/%2F",
+        "url": "amqp://rabbitmq-staging.example.invalid/%2F",
         "queues": ["app.dlq"]
       }
     },
@@ -92,7 +92,7 @@
       },
       "rabbitmq": {
         "enabled": false,
-        "url": "******rabbitmq-production.example.invalid/%2F",
+        "url": "amqp://rabbitmq-production.example.invalid/%2F",
         "queues": ["app.dlq"]
       }
     }
