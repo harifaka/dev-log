@@ -86,7 +86,12 @@ def sanitize_select_query(query: str) -> str:
         raise ConnectorError("SQL comments and statement separators are not allowed.")
     if not PLACEHOLDER_PATTERN.search(query):
         raise ConnectorError("Query profiles must use bound parameters.")
-    if re.search(r"\b(INSERT|UPDATE|DELETE|MERGE|DROP|ALTER|CREATE|TRUNCATE|EXEC(?:UTE)?)\b", query, re.I):
+    if re.search(
+        r"\b(INSERT|UPDATE|DELETE|MERGE|DROP|ALTER|CREATE|TRUNCATE|EXEC(?:UTE)?|"
+        r"CALL|GRANT|REVOKE|DENY|BACKUP|RESTORE)\b",
+        query,
+        re.I,
+    ):
         raise ConnectorError("Mutating SQL keywords are not allowed.")
     return query.strip()
 
@@ -263,8 +268,8 @@ class GraylogClient:
         try:
             import requests
             from requests.auth import HTTPBasicAuth
-            if '"' in query:
-                raise ConnectorError("Graylog query profiles may not contain double quotes.")
+            if not re.fullmatch(r"[A-Za-z0-9_:\s(){}./-]+", query):
+                raise ConnectorError("Graylog query profile contains unsupported syntax.")
             safe_business_id = self._escape_query_value(business_id)
             safe_correlation_id = self._escape_query_value(correlation_id or business_id)
             search_query = query.replace("{business_id}", f'"{safe_business_id}"').replace(
@@ -590,12 +595,10 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
             return jsonify({"error": config_error}), 503
         payload = request.get_json(silent=True) or {}
         business_id = str(payload.get("business_id", "")).strip()
-        if (
-            not business_id
-            or len(business_id) > MAX_BUSINESS_ID_LENGTH
-            or any(ord(char) < 32 for char in business_id)
-        ):
-            return jsonify({"error": "business_id is required and must be at most 256 characters."}), 400
+        if not re.fullmatch(r"[A-Za-z0-9._:/-]{1,256}", business_id):
+            return jsonify({
+                "error": "business_id must contain only letters, numbers, '.', '_', ':', '/', or '-'.",
+            }), 400
         selected = payload.get("services")
         service_ids = (
             [item for item in selected if isinstance(item, str) and item in profiles]
