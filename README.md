@@ -7,6 +7,8 @@ Graylog, and RabbitMQ streams.
 
 ## Phase 1 quick start
 
+Requires Python 3.11 or newer (the automated Windows build uses Python 3.12).
+
 ```bash
 python -m venv .venv
 .venv/bin/pip install -r requirements.txt

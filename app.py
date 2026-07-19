@@ -24,6 +24,7 @@ from waitress import serve
 LOGGER = logging.getLogger("dev_log")
 HOST = "127.0.0.1"
 PORT = 5050
+BROWSER_LAUNCH_DELAY_SECONDS = 0.75
 BASE_DIR = Path(__file__).resolve().parent
 
 
@@ -131,7 +132,8 @@ def main() -> int:
     """Start the local production WSGI server and launch the default browser."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     app = create_app()
-    threading.Timer(0.75, open_browser).start()
+    # Give Waitress time to bind before the browser makes its first request.
+    threading.Timer(BROWSER_LAUNCH_DELAY_SECONDS, open_browser).start()
     LOGGER.info("Starting dev-log on http://%s:%s", HOST, PORT)
     try:
         serve(app, host=HOST, port=PORT, threads=4)
