@@ -690,14 +690,16 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
             Spacer(1, 0.6 * cm),
         ]
 
-        warnings = [e for e in events if e.get("level") == "WARNING"]
+        fault_levels = {"WARNING", "ERROR", "CRITICAL"}
+        warnings = [e for e in events if e.get("level") in fault_levels]
         if warnings:
             story.append(Paragraph("Degraded Services", styles["Heading2"]))
             for w in warnings:
                 story.append(Paragraph(f"\u2022 {w.get('message', '')}", body))
             story.append(Spacer(1, 0.4 * cm))
 
-        data_events = [e for e in events if e.get("level") != "WARNING"]
+        # Include all events in the timeline table; faults also appear in the Degraded section above.
+        data_events = events
         story.append(
             Paragraph(f"Event Timeline ({len(data_events)} events)", styles["Heading2"])
         )
