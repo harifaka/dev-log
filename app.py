@@ -44,6 +44,7 @@ class RuntimeConfig:
     """Validated runtime settings needed by the Phase 1 shell."""
 
     active_environment: str
+    server: dict[str, Any]
     environments: dict[str, Any]
     services: list[dict[str, Any]]
 
@@ -81,10 +82,11 @@ def load_runtime_config() -> RuntimeConfig:
         raise ConfigurationError("config.json must contain a JSON object.")
     active = document.get("active_environment")
     environments = document.get("environments")
+    server = document.get("server", {})
     services = document.get("services")
-    if not isinstance(active, str) or not isinstance(environments, dict):
+    if not isinstance(active, str) or not isinstance(environments, dict) or not isinstance(server, dict):
         raise ConfigurationError(
-            "config.json must define string 'active_environment' and object 'environments'."
+            "config.json must define string 'active_environment', object 'server', and object 'environments'."
         )
     if active not in environments:
         raise ConfigurationError(
@@ -92,7 +94,7 @@ def load_runtime_config() -> RuntimeConfig:
         )
     if not isinstance(services, list) or not all(isinstance(item, dict) for item in services):
         raise ConfigurationError("config.json 'services' must be an array of objects.")
-    return RuntimeConfig(active, environments, services)
+    return RuntimeConfig(active, server, environments, services)
 
 
 def create_app(configuration: RuntimeConfig | None = None) -> Flask:
@@ -130,24 +132,26 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
     return app
 
 
-def open_browser() -> None:
+def open_browser(port: int) -> None:
     """Open the dashboard after Waitress has been given time to bind."""
-    webbrowser.open_new(f"http://{HOST}:{PORT}/")
+    webbrowser.open_new(f"http://{HOST}:{port}/")
 
 
 def main() -> int:
     """Start the local production WSGI server and launch the default browser."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     app = create_app()
+    runtime = app.config["RUNTIME_CONFIG"]
+    port = int(runtime.server.get("port", PORT)) if runtime else PORT
     # Give Waitress time to bind before the browser makes its first request.
-    browser_timer = threading.Timer(BROWSER_LAUNCH_DELAY_SECONDS, open_browser)
+    browser_timer = threading.Timer(BROWSER_LAUNCH_DELAY_SECONDS, open_browser, args=(port,))
     browser_timer.start()
-    LOGGER.info("Starting dev-log on http://%s:%s", HOST, PORT)
+    LOGGER.info("Starting dev-log on http://%s:%s", HOST, port)
     try:
-        serve(app, host=HOST, port=PORT, threads=WAITRESS_THREADS)
+        serve(app, host=HOST, port=port, threads=WAITRESS_THREADS)
     except OSError as exc:
         browser_timer.cancel()
-        LOGGER.error("Could not bind to %s:%s: %s", HOST, PORT, exc)
+        LOGGER.error("Could not bind to %s:%s: %s", HOST, port, exc)
         return 1
     return 0
 
