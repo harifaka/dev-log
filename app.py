@@ -97,8 +97,6 @@ def _bounded_call(function: Callable[[], Any]) -> Any:
     future = executor.submit(function)
     try:
         return future.result(timeout=CONNECTOR_TIMEOUT_SECONDS)
-    except Exception:
-        raise
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
 
@@ -216,9 +214,13 @@ class MSSQLAdapter:
             cursor.timeout = CONNECTOR_TIMEOUT_SECONDS
             cursor.execute(query, parameters)
             columns = [item[0].lower() for item in cursor.description or ()]
-            result = [row[0] if schema else _row_to_dict(columns, row) for row in (
-                cursor.fetchall() if schema else cursor.fetchmany(MAX_TRACE_RESULTS)
-            )]
+            if schema:
+                result = [row[0] for row in cursor.fetchall()]
+            else:
+                result = [
+                    _row_to_dict(columns, row)
+                    for row in cursor.fetchmany(MAX_TRACE_RESULTS)
+                ]
             connection.rollback()
             cursor.close()
             return result
@@ -545,7 +547,7 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
         if config_error or query_error or runtime is None:
             return jsonify({
                 "status": "configuration_error",
-                "message": config_error or query_error,
+                "message": "; ".join(error for error in (config_error, query_error) if error),
             }), 503
         return jsonify({"status": "ok", "environment": runtime.active_environment})
 
@@ -612,7 +614,10 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
             }
             for future in as_completed(futures):
                 timeline.extend(future.result())
-        timeline.sort(key=lambda item: str(item.get("timestamp") or ""))
+        timeline.sort(key=lambda item: (
+            item.get("timestamp") is None,
+            str(item.get("timestamp") or ""),
+        ))
         return jsonify({
             "environment": runtime.active_environment,
             "business_id": business_id,
