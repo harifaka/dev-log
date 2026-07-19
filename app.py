@@ -38,26 +38,6 @@ MAX_TRACE_RESULTS = 500
 MAX_RABBIT_MESSAGES = 10
 MAX_TRACE_WORKERS = 8
 MAX_BUSINESS_ID_LENGTH = 256
-DEFAULT_SERVICES = [
-    {"id": service_id, "name": name, "order": order}
-    for order, (service_id, name) in enumerate((
-        ("gateway", "API Gateway"), ("orders", "Order Service"),
-        ("payments", "Payment Service"), ("inventory", "Inventory Service"),
-        ("shipping", "Shipping Service"), ("notifications", "Notification Service"),
-        ("audit", "Audit Service"), ("reconciliation", "Reconciliation Service"),
-    ), 1)
-]
-DEFAULT_RUNTIME = RuntimeConfig(
-    active_environment="safe-local",
-    server={"host": HOST, "port": PORT},
-    environments={"safe-local": {"description": "Safe local fallback; connectors disabled.",
-                                 "mock_data": True}},
-    services=DEFAULT_SERVICES,
-)
-DEFAULT_PROFILES = {
-    service["id"]: {"display_name": service["name"], "source": "disabled"}
-    for service in DEFAULT_SERVICES
-}
 BOUNDED_EXECUTOR = ThreadPoolExecutor(max_workers=MAX_TRACE_WORKERS)
 TRACE_EXECUTOR = ThreadPoolExecutor(max_workers=MAX_TRACE_WORKERS)
 SELECT_PATTERN = re.compile(r"^\s*SELECT\b", re.IGNORECASE)
@@ -81,6 +61,28 @@ class RuntimeConfig:
     server: dict[str, Any]
     environments: dict[str, Any]
     services: list[dict[str, Any]]
+
+
+DEFAULT_SERVICES = [
+    {"id": service_id, "name": name, "order": order}
+    for order, (service_id, name) in enumerate((
+        ("gateway", "API Gateway"), ("orders", "Order Service"),
+        ("payments", "Payment Service"), ("inventory", "Inventory Service"),
+        ("shipping", "Shipping Service"), ("notifications", "Notification Service"),
+        ("audit", "Audit Service"), ("reconciliation", "Reconciliation Service"),
+    ), 1)
+]
+DEFAULT_RUNTIME = RuntimeConfig(
+    active_environment="safe-local",
+    server={"host": HOST, "port": PORT},
+    environments={"safe-local": {"description": "Safe local fallback; connectors disabled.",
+                                 "mock_data": True}},
+    services=DEFAULT_SERVICES,
+)
+DEFAULT_PROFILES = {
+    service["id"]: {"display_name": service["name"], "source": "disabled"}
+    for service in DEFAULT_SERVICES
+}
 
 
 class ConnectorError(RuntimeError):
