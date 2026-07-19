@@ -545,6 +545,7 @@ def _escape_like_pattern(value: str) -> str:
     Example:
         _escape_like_pattern("test_100%") -> "%test\\_100\\%%"
     """
+    # Escape backslash first so the subsequent '%' and '_' escapes are not themselves escaped.
     escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"%{escaped}%"
 
@@ -614,7 +615,7 @@ def validate_search_id(service_id: str, profile: dict[str, Any], search_id: str,
         try:
             re.compile(search_id)
         except re.error as exc:
-            return False, f"Invalid regular expression: {exc}"
+            return False, "Invalid regular expression syntax."
         return True, ""
     pattern = str(strategy.get("validation_regex", ""))
     case_sensitive = bool(strategy.get("case_sensitive", False))
@@ -671,6 +672,9 @@ def extract_correlation_id(
 
     match = compiled.search(text)
     service_label = str(profile.get("display_name") or profile.get("id") or "unknown")
+    # lastindex is the index of the last matched capturing group, or None if no
+    # group participated.  Group 1 is the first capturing group, so a truthy
+    # lastindex guarantees match.group(1) is valid.
     if match and match.lastindex:
         return match.group(1)
     if match:
