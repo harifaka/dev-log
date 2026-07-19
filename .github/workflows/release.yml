@@ -25,7 +25,7 @@ jobs:
       - name: Create release on every main push
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: dev-log-${{ github.run_number }}
+          RELEASE_TAG: dev-log-${{ github.run_number }}-${{ github.sha }}
           RELEASE_SHA: ${{ github.sha }}
         run: |
           gh release create "$env:RELEASE_TAG" "dist/dev-log.exe" `

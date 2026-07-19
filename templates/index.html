@@ -21,17 +21,18 @@
   </style>
 </head>
 <body>
-  <header><div><h1>dev-log</h1><p class="muted">Hybrid transaction tracing and RCA hub</p></div><span class="status" aria-label="Connected to local loopback">● local loopback</span></header>
+  <header><div><h1>dev-log</h1><p class="muted">Hybrid transaction tracing and RCA hub</p></div><span class="status" role="status">● local loopback</span></header>
   <main>
     {% if config_error %}<div class="error" role="alert"><strong>Configuration unavailable.</strong> {{ config_error }} Edit config.json and reload.</div>{% endif %}
     <form class="toolbar" aria-label="Investigation controls">
       <label>Environment<select name="environment">{% for name in (runtime.environments if runtime else {}) %}<option>{{ name }}</option>{% endfor %}</select></label>
       <label>Business identifier<input name="business_id" placeholder="Order ID or payload ID" required></label>
-      <button type="button" disabled title="Correlation engine will be enabled in Phase 4">Investigate</button>
+      <button type="button" disabled aria-describedby="investigate-help">Investigate</button>
+      <span id="investigate-help" class="muted">Correlation engine will be enabled in Phase 4.</span>
     </form>
     <div class="grid">
       <section class="panel"><h2>Transaction pipeline</h2><div class="graph" aria-label="Vis.js network graph placeholder">
-        <div class="nodes">{% for service in (runtime.services if runtime else []) %}<button class="node skipped" type="button" aria-disabled="true">{{ service.name }}</button>{% endfor %}</div>
+        <div class="nodes">{% for service in (runtime.services if runtime else []) %}<button class="node skipped" type="button" disabled>{{ service.name }}</button>{% endfor %}</div>
       </div><div class="console" aria-label="Log console">Select a service node to view its raw timeline logs.</div></section>
       <aside class="panel"><h2>RCA action plan</h2><p class="muted" style="margin-top:12px">No investigation loaded. PDF generation is enabled after correlation results are available.</p></aside>
     </div>

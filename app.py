@@ -25,6 +25,8 @@ LOGGER = logging.getLogger("dev_log")
 HOST = "127.0.0.1"
 PORT = 5050
 BROWSER_LAUNCH_DELAY_SECONDS = 0.75
+# Four workers keep the local UI responsive without creating unbounded load.
+WAITRESS_THREADS = 4
 BASE_DIR = Path(__file__).resolve().parent
 
 
@@ -140,7 +142,7 @@ def main() -> int:
     threading.Timer(BROWSER_LAUNCH_DELAY_SECONDS, open_browser).start()
     LOGGER.info("Starting dev-log on http://%s:%s", HOST, PORT)
     try:
-        serve(app, host=HOST, port=PORT, threads=4)
+        serve(app, host=HOST, port=PORT, threads=WAITRESS_THREADS)
     except OSError as exc:
         LOGGER.error("Could not bind to %s:%s: %s", HOST, PORT, exc)
         return 1
