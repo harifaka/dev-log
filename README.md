@@ -5,7 +5,7 @@ An enterprise-grade, lightweight hybrid log investigator and root cause analysis
 microservices from a single business identifier, combining Oracle/MSSQL logs,
 Graylog, and RabbitMQ streams.
 
-## Phase 1 quick start
+## Quick start
 
 Requires Python 3.11 or newer (the automated Windows build uses Python 3.12).
 
@@ -20,6 +20,20 @@ The application opens `http://127.0.0.1:5050/` automatically. Copy
 commit real credentials or API tokens. A malformed configuration is reported
 in the dashboard and through `/api/health`, rather than preventing the shell
 from starting.
+
+## Connector API
+
+Enable connectors in the active environment of `config.json`. Database profiles
+are restricted to bound, single-statement `SELECT` queries and use five-second
+operation limits. Oracle uses the `oracledb` Thin Mode pool; SQL Server uses
+`pyodbc`; Graylog uses `API_TOKEN:session` Basic Auth; and RabbitMQ samples
+messages with requeue enabled so the queue is not consumed.
+
+- `GET /api/schema/reflect?service=orders` reflects columns for a relational profile.
+- `POST /api/trace/execute` accepts `{"business_id":"...", "correlation_id":"..."}`.
+
+Connector failures become warning events in the response, allowing available
+services to return partial timelines.
 
 ## Project map
 
