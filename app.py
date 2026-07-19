@@ -38,6 +38,8 @@ MAX_TRACE_RESULTS = 500
 MAX_RABBIT_MESSAGES = 10
 MAX_TRACE_WORKERS = 8
 MAX_BUSINESS_ID_LENGTH = 256
+BOUNDED_EXECUTOR = ThreadPoolExecutor(max_workers=MAX_TRACE_WORKERS)
+TRACE_EXECUTOR = ThreadPoolExecutor(max_workers=MAX_TRACE_WORKERS)
 SELECT_PATTERN = re.compile(r"^\s*SELECT\b", re.IGNORECASE)
 SQL_COMMENT_PATTERN = re.compile(r"(--|/\*|\*/|;)")
 PLACEHOLDER_PATTERN = re.compile(r"(?<!:):[A-Za-z_][A-Za-z0-9_]*|@[A-Za-z_][A-Za-z0-9_]*")
@@ -98,12 +100,8 @@ def sanitize_select_query(query: str) -> str:
 
 def _bounded_call(function: Callable[[], Any]) -> Any:
     """Run a connector operation with a hard five-second wall-clock limit."""
-    executor = ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(function)
-    try:
-        return future.result(timeout=CONNECTOR_TIMEOUT_SECONDS)
-    finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+    future = BOUNDED_EXECUTOR.submit(function)
+    return future.result(timeout=CONNECTOR_TIMEOUT_SECONDS)
 
 
 class OracleAdapter:
@@ -189,7 +187,8 @@ class MSSQLAdapter:
             import pyodbc
             connection_string = self.settings.get("connection_string", "")
             connection_string += f";UID={self.settings.get('user', '')}"
-            connection_string += ";P" + "W" + "D=" + str(self.settings.get("password", ""))
+            db_password = self.settings.get("password", "")
+            connection_string += ";PWD=" + str(db_password)
             connection_string += ";ApplicationIntent=ReadOnly"
             return pyodbc.connect(
                 connection_string,
@@ -241,10 +240,12 @@ class MSSQLAdapter:
     def query(self, query: str, business_id: str) -> list[dict[str, Any]]:
         validated_query = sanitize_select_query(query)
         parameter_matches = re.findall(r"(?<![A-Za-z0-9_])@business_id\b", validated_query)
-        if len(parameter_matches) != 1:
+        if not parameter_matches:
             raise ConnectorError("MSSQL query must bind @business_id.")
-        safe_query = re.sub(r"(?<![A-Za-z0-9_])@business_id\b", "?", validated_query, count=1)
-        return _bounded_call(lambda: self._execute(safe_query, (business_id,)))
+        safe_query = re.sub(r"(?<![A-Za-z0-9_])@business_id\b", "?", validated_query)
+        return _bounded_call(
+            lambda: self._execute(safe_query, (business_id,) * len(parameter_matches))
+        )
 
     def schema(self, table: str) -> list[str]:
         if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", table):
@@ -597,11 +598,11 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
         payload = request.get_json(silent=True) or {}
         business_id = str(payload.get("business_id", "")).strip()
         if not re.fullmatch(
-            rf"[A-Za-z0-9._:/-]{{1,{MAX_BUSINESS_ID_LENGTH}}}",
+            rf"[A-Za-z0-9._-]{{1,{MAX_BUSINESS_ID_LENGTH}}}",
             business_id,
         ):
             return jsonify({
-                "error": "business_id must contain only letters, numbers, '.', '_', ':', '/', or '-'.",
+                "error": "business_id must contain only letters, numbers, '.', '_', or '-'.",
             }), 400
         selected = payload.get("services")
         service_ids = (
@@ -611,16 +612,15 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
         environment = runtime.environments[runtime.active_environment]
         correlation_id = payload.get("correlation_id")
         timeline: list[dict[str, Any]] = []
-        with ThreadPoolExecutor(max_workers=min(MAX_TRACE_WORKERS, max(1, len(service_ids)))) as executor:
-            futures = {
-                executor.submit(
-                    _run_profile, service_id, profiles[service_id], environment,
-                    business_id, str(correlation_id) if correlation_id else None, connector_cache,
-                ): service_id
-                for service_id in service_ids
-            }
-            for future in as_completed(futures):
-                timeline.extend(future.result())
+        futures = {
+            TRACE_EXECUTOR.submit(
+                _run_profile, service_id, profiles[service_id], environment,
+                business_id, str(correlation_id) if correlation_id else None, connector_cache,
+            ): service_id
+            for service_id in service_ids
+        }
+        for future in as_completed(futures):
+            timeline.extend(future.result())
         timeline.sort(key=lambda item: (
             item.get("timestamp") is None,
             str(item.get("timestamp") or ""),
