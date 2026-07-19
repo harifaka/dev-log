@@ -666,7 +666,7 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
             )
         except ImportError as exc:
             LOGGER.warning("ReportLab not available: %s", exc)
-            return jsonify({"error": "PDF generation requires reportlab."}), 503
+            return jsonify({"error": "PDF generation requires reportlab. Install with: pip install reportlab"}), 503
 
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(

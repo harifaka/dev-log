@@ -137,7 +137,7 @@
       events.forEach(e => {
         if (!e.service) return;
         if (!map[e.service]) map[e.service] = false;
-        if (e.level === 'WARNING') map[e.service] = true;
+        if (['WARNING','ERROR','CRITICAL'].indexOf(e.level) !== -1) map[e.service] = true;
       });
       nodesEl.querySelectorAll('.node').forEach(n => {
         const id = n.dataset.sid;
@@ -267,7 +267,7 @@
         setStatus('PDF failed: ' + err.message, true);
       } finally {
         pdfBtn.disabled = false;
-        pdfBtn.textContent = '\u8659 Download PDF';
+        pdfBtn.textContent = '\u21D3 Download PDF';
       }
     });
 
