@@ -1,5 +1,7 @@
 {
   "active_environment": "development",
+  "allow_raw_regex_queries": false,
+  "fallback_correlation_regex": "(?i)correlation[-_]?id[:=\\s]*['\"]?([a-z0-9._:-]{4,})['\"]?",
   "server": {
     "host": "127.0.0.1",
     "port": 5050,
