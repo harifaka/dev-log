@@ -71,6 +71,7 @@ class RuntimeConfig:
     services: list[dict[str, Any]]
     allow_raw_regex_queries: bool = False
     fallback_correlation_regex: str = ""
+    legacy_business_id_service: str = "gateway"
 
 
 DEFAULT_SERVICES = [
@@ -90,6 +91,7 @@ DEFAULT_RUNTIME = RuntimeConfig(
     services=DEFAULT_SERVICES,
     allow_raw_regex_queries=False,
     fallback_correlation_regex="(?i)correlation[-_]?id[:=\\s]*['\"]?([a-z0-9._:-]{4,})['\"]?",
+    legacy_business_id_service="gateway",
 )
 DEFAULT_PROFILES = {
     service["id"]: {"display_name": service["name"], "source": "disabled"}
@@ -300,7 +302,10 @@ class GraylogClient:
             import requests
             from requests.auth import HTTPBasicAuth
             # Allow Graylog/Lucene field names, quoted phrases, ranges, booleans, and wildcards.
-            # Disallows newlines, backslashes, and any other characters that could escape the query context.
+            # This intentionally permits quotes, ampersands, pipes, etc. because the query is a
+            # template produced by the operator, not raw user input; user identifiers are escaped
+            # below before being substituted into the template.  Newlines, backslashes, and any
+            # other characters are rejected to keep the query context predictable.
             if not re.fullmatch(r"[A-Za-z0-9_:\s(){}./\[\]@+\-&|!^=\"']+", query):
                 raise ConnectorError("Graylog query profile contains unsupported syntax.")
             safe_business_id = self._escape_query_value(business_id)
@@ -498,7 +503,10 @@ def load_runtime_config() -> RuntimeConfig:
     fallback_regex = str(
         document.get("fallback_correlation_regex") or DEFAULT_RUNTIME.fallback_correlation_regex
     )
-    return RuntimeConfig(active, server, environments, services, allow_raw, fallback_regex)
+    legacy_service = str(
+        document.get("legacy_business_id_service") or DEFAULT_RUNTIME.legacy_business_id_service
+    )
+    return RuntimeConfig(active, server, environments, services, allow_raw, fallback_regex, legacy_service)
 
 
 def load_query_profiles() -> dict[str, dict[str, Any]]:
@@ -533,6 +541,9 @@ def _escape_like_pattern(value: str) -> str:
     preserved and do not accidentally escape the subsequent '%' and '_'
     escapes.  Each remaining '%'/'_' is turned into a literal character by
     prefixing it with a backslash, which the ESCAPE '\\' clause interprets.
+
+    Example:
+        _escape_like_pattern("test_100%") -> "%test\\_100\\%%"
     """
     escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"%{escaped}%"
@@ -660,7 +671,7 @@ def extract_correlation_id(
 
     match = compiled.search(text)
     service_label = str(profile.get("display_name") or profile.get("id") or "unknown")
-    if match and match.lastindex and match.lastindex >= 1:
+    if match and match.lastindex:
         return match.group(1)
     if match:
         # The regex matched but has no capturing group; return the whole match
@@ -851,15 +862,16 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
         requested_service = str(payload.get("service", "")).strip()
         search_id = str(payload.get("search_id", "")).strip()
 
-        # If the legacy business_id field is sent, treat it as a gateway lookup
-        # to preserve backwards compatibility with older clients.  The legacy
-        # mapping is configurable by ensuring a "gateway" service exists in
-        # query_templates.json; otherwise the request falls back to a 400.
+        # If the legacy business_id field is sent, map it to the configured
+        # legacy service (default "gateway") to preserve backwards compatibility
+        # with older clients.  Operators can change the target service via
+        # config.json "legacy_business_id_service".
         legacy_business_id = str(payload.get("business_id", "")).strip()
         if not requested_service and legacy_business_id:
-            if "gateway" not in profiles:
+            legacy_service = runtime.legacy_business_id_service
+            if legacy_service not in profiles:
                 return jsonify({"error": "Legacy business_id mapping unavailable."}), 400
-            requested_service = "gateway"
+            requested_service = legacy_service
             search_id = legacy_business_id
 
         profile = profiles.get(requested_service)
