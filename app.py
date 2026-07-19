@@ -240,9 +240,10 @@ class MSSQLAdapter:
 
     def query(self, query: str, business_id: str) -> list[dict[str, Any]]:
         validated_query = sanitize_select_query(query)
-        if validated_query.count("@business_id") != 1:
+        parameter_matches = re.findall(r"(?<![A-Za-z0-9_])@business_id\b", validated_query)
+        if len(parameter_matches) != 1:
             raise ConnectorError("MSSQL query must bind @business_id.")
-        safe_query = re.sub(r"@business_id\b", "?", validated_query)
+        safe_query = re.sub(r"(?<![A-Za-z0-9_])@business_id\b", "?", validated_query, count=1)
         return _bounded_call(lambda: self._execute(safe_query, (business_id,)))
 
     def schema(self, table: str) -> list[str]:
@@ -595,7 +596,10 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
             return jsonify({"error": config_error}), 503
         payload = request.get_json(silent=True) or {}
         business_id = str(payload.get("business_id", "")).strip()
-        if not re.fullmatch(r"[A-Za-z0-9._:/-]{1,256}", business_id):
+        if not re.fullmatch(
+            rf"[A-Za-z0-9._:/-]{{1,{MAX_BUSINESS_ID_LENGTH}}}",
+            business_id,
+        ):
             return jsonify({
                 "error": "business_id must contain only letters, numbers, '.', '_', ':', '/', or '-'.",
             }), 400
