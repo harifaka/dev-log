@@ -21,12 +21,12 @@
   </style>
 </head>
 <body>
-  <header><div><h1>dev-log</h1><p class="muted">Hybrid transaction tracing and RCA hub</p></div><span class="status" role="status">● local loopback</span></header>
+  <header><div><h1>dev-log</h1><p class="muted">Hybrid transaction tracing and RCA hub</p></div><span class="status" role="status" aria-label="Connected to local loopback">● local loopback</span></header>
   <main>
     {% if config_error %}<div class="error" role="alert"><strong>Configuration unavailable.</strong> {{ config_error }} Edit config.json and reload.</div>{% endif %}
     <form class="toolbar" aria-label="Investigation controls">
-      <label>Environment<select name="environment">{% for name in (runtime.environments if runtime else {}) %}<option>{{ name }}</option>{% endfor %}</select></label>
-      <label>Business identifier<input name="business_id" placeholder="Order ID or payload ID" required></label>
+      <label for="environment">Environment<select id="environment" name="environment">{% for name in (runtime.environments if runtime else {}) %}<option>{{ name }}</option>{% endfor %}</select></label>
+      <label for="business-id">Business identifier<input id="business-id" name="business_id" placeholder="Order ID or payload ID" required></label>
       <button type="button" disabled aria-describedby="investigate-help">Investigate</button>
       <span id="investigate-help" class="muted">Correlation engine will be enabled in Phase 4.</span>
     </form>

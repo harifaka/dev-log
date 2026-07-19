@@ -24,6 +24,7 @@ from waitress import serve
 LOGGER = logging.getLogger("dev_log")
 HOST = "127.0.0.1"
 PORT = 5050
+# Empirically reliable minimum for Waitress to bind on slower desktop systems.
 BROWSER_LAUNCH_DELAY_SECONDS = 0.75
 # Four workers keep the local UI responsive without creating unbounded load.
 WAITRESS_THREADS = 4
@@ -139,11 +140,13 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     app = create_app()
     # Give Waitress time to bind before the browser makes its first request.
-    threading.Timer(BROWSER_LAUNCH_DELAY_SECONDS, open_browser).start()
+    browser_timer = threading.Timer(BROWSER_LAUNCH_DELAY_SECONDS, open_browser)
+    browser_timer.start()
     LOGGER.info("Starting dev-log on http://%s:%s", HOST, PORT)
     try:
         serve(app, host=HOST, port=PORT, threads=WAITRESS_THREADS)
     except OSError as exc:
+        browser_timer.cancel()
         LOGGER.error("Could not bind to %s:%s: %s", HOST, PORT, exc)
         return 1
     return 0
