@@ -422,10 +422,15 @@ def resource_path(name: str) -> Path:
     # The current working directory wins, allowing an executable's config to
     # be edited without unpacking or rebuilding it.
     for root in (external_root, executable_root, bundle_root):
-        candidate = (root / relative_name).resolve()
-        if candidate.exists():
+        safe_root = root.resolve()
+        candidate = (safe_root / relative_name).resolve()
+        if candidate.is_relative_to(safe_root) and candidate.exists():
             return candidate
-    return (bundle_root / relative_name).resolve()
+    safe_bundle_root = bundle_root.resolve()
+    fallback = (safe_bundle_root / relative_name).resolve()
+    if not fallback.is_relative_to(safe_bundle_root):
+        raise ValueError("Bundled resource is outside the application directory.")
+    return fallback
 
 
 def load_json(name: str) -> Any:
