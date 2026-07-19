@@ -19,17 +19,20 @@
 - RabbitMQ queue depth and requeued DLQ sampling (maximum ten messages).
 - Partial-failure warnings for unavailable infrastructure.
 
-## Phase 4 — correlation (in progress)
+## Phase 4 — correlation (complete)
 
 - Query configured service profiles concurrently from `/api/trace/execute`.
 - Normalize and merge available events into one chronological timeline.
-- Resolve a business identifier to a global correlation ID.
+- Support per-request environment override; fault-isolated warnings injected into timeline.
+- Frontend wired to backend: environment selector, business-ID form, live Investigate button.
+- Service nodes colour-coded success/fault/skipped; click to filter event log by service.
 
-## Phase 5 — investigation experience
+## Phase 5 — investigation experience (partial)
 
-- Replace the graph placeholder with locally bundled Vis.js Network.
-- Add node filtering, raw JSON/SQL console views, and failure state coloring.
-- Generate formatted PDF action plans with ReportLab.
+- Node filtering and failure state colouring in the service pipeline panel.
+- Raw chronological event console with service-level drill-down.
+- `/api/report/pdf` endpoint: ReportLab-formatted RCA action plan with event timeline table.
+- Frontend PDF download button; Vis.js network graph replacement still pending.
 
 ## Phase 6 — hardening
 

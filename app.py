@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request
 from waitress import serve
 
 LOGGER = logging.getLogger("dev-log")
@@ -611,7 +611,13 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
             [item for item in selected if isinstance(item, str) and item in profiles]
             if isinstance(selected, list) else list(profiles)
         )
-        environment = runtime.environments[runtime.active_environment]
+        requested_env = payload.get("environment")
+        env_name = (
+            requested_env
+            if isinstance(requested_env, str) and requested_env in runtime.environments
+            else runtime.active_environment
+        )
+        environment = runtime.environments[env_name]
         correlation_id = payload.get("correlation_id")
         timeline: list[dict[str, Any]] = []
         futures = {
@@ -628,11 +634,116 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
             str(item.get("timestamp") or ""),
         ))
         return jsonify({
-            "environment": runtime.active_environment,
+            "environment": env_name,
             "business_id": business_id,
             "events": timeline[:MAX_TRACE_RESULTS],
             "warnings": [event for event in timeline if event.get("level") == "WARNING"],
         })
+
+    @app.post("/api/report/pdf")
+    def generate_pdf():
+        """Generate a formatted PDF RCA report from a completed trace result."""
+        if runtime is None:
+            return jsonify({"error": config_error}), 503
+        payload = request.get_json(silent=True) or {}
+        business_id = str(payload.get("business_id", "")).strip()
+        if not business_id:
+            return jsonify({"error": "business_id is required."}), 400
+        events: list[dict[str, Any]] = [
+            e for e in (payload.get("events") or []) if isinstance(e, dict)
+        ]
+        environment_name = str(
+            payload.get("environment", runtime.active_environment)
+        )
+        try:
+            import io
+            from reportlab.lib import colors
+            from reportlab.lib.pagesizes import A4
+            from reportlab.lib.styles import getSampleStyleSheet
+            from reportlab.lib.units import cm
+            from reportlab.platypus import (
+                Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
+            )
+        except ImportError as exc:
+            LOGGER.warning("ReportLab not available: %s", exc)
+            return jsonify({"error": "PDF generation requires ReportLab. Install with: pip install reportlab"}), 503
+
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=A4,
+            leftMargin=2 * cm,
+            rightMargin=2 * cm,
+            topMargin=2 * cm,
+            bottomMargin=2 * cm,
+        )
+        styles = getSampleStyleSheet()
+        body = styles["BodyText"]
+        story: list[Any] = [
+            Paragraph(f"RCA Action Plan \u2014 {business_id}", styles["Title"]),
+            Spacer(1, 0.4 * cm),
+            Paragraph(f"Environment: {environment_name}", body),
+            Paragraph(
+                f"Generated: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}",
+                body,
+            ),
+            Spacer(1, 0.6 * cm),
+        ]
+
+        fault_levels = {"WARNING", "ERROR", "CRITICAL"}
+        fault_events = [e for e in events if e.get("level") in fault_levels]
+        if fault_events:
+            story.append(Paragraph("Degraded Services", styles["Heading2"]))
+            for w in fault_events:
+                story.append(Paragraph(f"\u2022 {w.get('message', '')}", body))
+            story.append(Spacer(1, 0.4 * cm))
+
+        # Include all events in the timeline table; faults also appear in the Degraded section above.
+        data_events = events
+        story.append(
+            Paragraph(f"Event Timeline ({len(data_events)} events)", styles["Heading2"])
+        )
+        story.append(Spacer(1, 0.3 * cm))
+
+        if data_events:
+            page_w = A4[0] - 4 * cm
+            col_w = [3.8 * cm, 2.6 * cm, 1.6 * cm, page_w - 8 * cm]
+            rows: list[list[str]] = [["Timestamp", "Service", "Level", "Message"]]
+            for event in data_events[:MAX_TRACE_RESULTS]:
+                rows.append([
+                    str(event.get("timestamp") or "")[:19],
+                    str(event.get("service") or "")[:20],
+                    str(event.get("level") or "")[:8],
+                    str(event.get("message") or "")[:300],
+                ])
+            tbl = Table(rows, colWidths=col_w, repeatRows=1)
+            tbl.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0b3d6e")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f0f4f8")]),
+                ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#c0ccd8")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ]))
+            story.append(tbl)
+        else:
+            story.append(Paragraph("No data events found for this identifier.", body))
+
+        doc.build(story)
+        buffer.seek(0)
+        return Response(
+            buffer.read(),
+            mimetype="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="rca-{business_id}.pdf"',
+                "Cache-Control": "no-store",
+            },
+        )
 
     return app
 
