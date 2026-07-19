@@ -55,13 +55,21 @@
           {% endfor %}
         </select>
       </label>
-      <label for="business-id">Business identifier
-        <input id="business-id" name="business_id" placeholder="Order ID or payload ID" required autocomplete="off">
+      <label for="service">Ingress Service
+        <select id="service" name="service" required>
+          {% for service in (runtime.services if runtime else []) %}
+          <option value="{{ service.id }}">{{ service.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label for="search-id">Search identifier
+        <input id="search-id" name="search_id" placeholder="Order ID, UUID, or context token" required autocomplete="off">
       </label>
       <div style="align-self:end">
         <button type="submit" id="investigate-btn">Investigate</button>
       </div>
       <span id="inv-status" class="muted" aria-live="polite"></span>
+      <span id="expected-format" class="muted" style="width:100%;font-size:12px;margin-top:-6px">Select an ingress service to see the expected input format.</span>
     </form>
     <div class="grid">
       <section class="panel">
@@ -151,9 +159,11 @@
   <script>
     const form        = document.querySelector('form');
     const invBtn      = document.getElementById('investigate-btn');
-    const bidInput    = document.getElementById('business-id');
+    const svcSelect   = document.getElementById('service');
+    const sidInput    = document.getElementById('search-id');
     const envSelect   = document.getElementById('environment');
     const statusEl    = document.getElementById('inv-status');
+    const formatEl    = document.getElementById('expected-format');
     const consoleEl   = document.getElementById('console');
     const evtCountEl  = document.getElementById('evt-count');
     const networkEl   = document.getElementById('pipeline-network');
@@ -162,7 +172,8 @@
     const rcaPanel    = document.getElementById('rca-panel');
     const allBtn      = document.getElementById('all-btn');
 
-    let allEvents = [], activeFilter = null, lastBid = '', lastEnv = '', network = null;
+    let allEvents = [], activeFilter = null, lastSid = '', lastSvc = '', lastEnv = '', network = null;
+    let currentStrategy = {validation_regex: '', expected_format: '', allow_raw_regex_queries: false};
 
     function setStatus(msg, err) {
       statusEl.textContent = msg;
@@ -246,14 +257,54 @@
       rcaPanel.innerHTML = html;
     }
 
+    async function loadStrategy(serviceId) {
+      try {
+        const res = await fetch('/api/strategy/' + encodeURIComponent(serviceId));
+        if (!res.ok) {
+          formatEl.textContent = 'Unable to load expected input format.';
+          return;
+        }
+        currentStrategy = await res.json();
+        const expected = currentStrategy.expected_format || 'any supported token';
+        const rawHint  = currentStrategy.allow_raw_regex_queries ? ' (raw regex allowed)' : '';
+        formatEl.textContent = 'Expected: ' + expected + rawHint;
+      } catch (err) {
+        formatEl.textContent = 'Expected format unavailable.';
+      }
+    }
+
+    function validateClientInput(value) {
+      if (!value) return 'Enter a search identifier.';
+      if (currentStrategy.allow_raw_regex_queries) {
+        try { new RegExp(value); } catch (e) { return 'Invalid regular expression.'; }
+        return '';
+      }
+      const pattern = currentStrategy.validation_regex;
+      if (!pattern) return '';
+      try {
+        const re = new RegExp(pattern, currentStrategy.case_sensitive ? '' : 'i');
+        if (!re.test(value)) {
+          return 'Input does not match expected format: ' + (currentStrategy.expected_format || '') + '.';
+        }
+      } catch (e) {
+        return 'Validation rule is misconfigured.';
+      }
+      return '';
+    }
+
     async function investigate(e) {
       e.preventDefault();
-      const bid = bidInput.value.trim();
-      if (!bid) { setStatus('Enter a business identifier.', true); return; }
+      const service = svcSelect ? svcSelect.value : '';
+      const sid = sidInput.value.trim();
+      if (!service) { setStatus('Select an ingress service.', true); return; }
+      if (!sid) { setStatus('Enter a search identifier.', true); return; }
+
+      const clientError = validateClientInput(sid);
+      if (clientError) { setStatus(clientError, true); consoleEl.textContent = clientError; return; }
 
       invBtn.disabled = true;
       invBtn.textContent = 'Investigating\u2026';
-      setStatus('Querying all service connectors\u2026');
+      setStatus('Querying connector\u2026');
       pdfBtn.disabled = true;
       allEvents = [];
       activeFilter = null;
@@ -265,13 +316,14 @@
         const res  = await fetch('/api/trace/execute', {
           method:  'POST',
           headers: {'Content-Type': 'application/json'},
-          body:    JSON.stringify({business_id: bid, environment: envSelect ? envSelect.value : ''}),
+          body:    JSON.stringify({service: service, search_id: sid, environment: envSelect ? envSelect.value : ''}),
         });
         const data = await res.json();
         if (!res.ok) { setStatus(data.error || 'HTTP ' + res.status, true); consoleEl.textContent = data.error || 'Request error.'; return; }
 
         allEvents  = data.events  || [];
-        lastBid    = data.business_id || bid;
+        lastSid    = data.search_id || sid;
+        lastSvc    = data.service || service;
         lastEnv    = data.environment || '';
         activeFilter = null;
 
@@ -294,6 +346,11 @@
       resetTerminalView();
     });
 
+    if (svcSelect) {
+      svcSelect.addEventListener('change', () => loadStrategy(svcSelect.value));
+      loadStrategy(svcSelect.value);
+    }
+
     // PDF download
     pdfBtn.addEventListener('click', async () => {
       pdfBtn.disabled = true;
@@ -302,7 +359,7 @@
         const res = await fetch('/api/report/pdf', {
           method:  'POST',
           headers: {'Content-Type': 'application/json'},
-          body:    JSON.stringify({business_id: lastBid, environment: lastEnv, events: allEvents}),
+          body:    JSON.stringify({business_id: lastSid, environment: lastEnv, events: allEvents}),
         });
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
