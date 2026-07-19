@@ -278,7 +278,7 @@
     function validateClientInput(value) {
       if (!value) return 'Enter a search identifier.';
       if (currentStrategy.allow_raw_regex_queries) {
-        try { new RegExp(value); } catch (e) { return 'Invalid regular expression: ' + (e.message || e); }
+        try { new RegExp(value); } catch (e) { return 'Invalid regular expression: ' + (e.message || 'invalid pattern'); }
         return '';
       }
       const pattern = currentStrategy.validation_regex;

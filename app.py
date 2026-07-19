@@ -298,7 +298,7 @@ class GraylogClient:
         try:
             import requests
             from requests.auth import HTTPBasicAuth
-            if not re.fullmatch(r"[A-Za-z0-9_:\s(){}./\[\]@+\-&|!^=\"'\-]+", query):
+            if not re.fullmatch(r"[A-Za-z0-9_:\s(){}./\[\]@+\-&|!^=\"']+", query):
                 raise ConnectorError("Graylog query profile contains unsupported syntax.")
             safe_business_id = self._escape_query_value(business_id)
             safe_correlation_id = self._escape_query_value(correlation_id or business_id)
@@ -633,7 +633,7 @@ def extract_correlation_id(
     """
     strategy = profile.get("identification_strategy", {})
     pattern = str(strategy.get("correlation_extractor_regex") or fallback_regex)
-    case_sensitive = bool(strategy.get("case_sensitive")) if "case_sensitive" in strategy else None
+    case_sensitive = bool(strategy.get("case_sensitive", False))
     try:
         compiled = compile_correlation_regex(pattern, case_sensitive)
     except re.error as exc:
@@ -650,8 +650,10 @@ def extract_correlation_id(
         text = str(payload)
 
     match = compiled.search(text)
+    if match and match.lastindex and match.lastindex >= 1:
+        return match.group(1)
     if match:
-        return match.group(1) if match.lastindex else match.group(0)
+        return match.group(0)
     return None
 
 
