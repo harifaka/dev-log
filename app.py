@@ -38,6 +38,26 @@ MAX_TRACE_RESULTS = 500
 MAX_RABBIT_MESSAGES = 10
 MAX_TRACE_WORKERS = 8
 MAX_BUSINESS_ID_LENGTH = 256
+DEFAULT_SERVICES = [
+    {"id": service_id, "name": name, "order": order}
+    for order, (service_id, name) in enumerate((
+        ("gateway", "API Gateway"), ("orders", "Order Service"),
+        ("payments", "Payment Service"), ("inventory", "Inventory Service"),
+        ("shipping", "Shipping Service"), ("notifications", "Notification Service"),
+        ("audit", "Audit Service"), ("reconciliation", "Reconciliation Service"),
+    ), 1)
+]
+DEFAULT_RUNTIME = RuntimeConfig(
+    active_environment="safe-local",
+    server={"host": HOST, "port": PORT},
+    environments={"safe-local": {"description": "Safe local fallback; connectors disabled.",
+                                 "mock_data": True}},
+    services=DEFAULT_SERVICES,
+)
+DEFAULT_PROFILES = {
+    service["id"]: {"display_name": service["name"], "source": "disabled"}
+    for service in DEFAULT_SERVICES
+}
 BOUNDED_EXECUTOR = ThreadPoolExecutor(max_workers=MAX_TRACE_WORKERS)
 TRACE_EXECUTOR = ThreadPoolExecutor(max_workers=MAX_TRACE_WORKERS)
 SELECT_PATTERN = re.compile(r"^\s*SELECT\b", re.IGNORECASE)
@@ -391,10 +411,14 @@ def resource_path(name: str) -> Path:
     """Resolve a bundled resource for source runs and PyInstaller one-files."""
     bundle_root = Path(getattr(sys, "_MEIPASS", BASE_DIR))
     external_root = Path.cwd()
+    executable_root = Path(sys.executable).resolve().parent
     # The current working directory wins, allowing an executable's config to
     # be edited without unpacking or rebuilding it.
-    external = external_root / name
-    return external if external.exists() else bundle_root / name
+    for root in (external_root, executable_root, bundle_root):
+        candidate = (root / name).resolve()
+        if candidate.exists():
+            return candidate
+    return (bundle_root / name).resolve()
 
 
 def load_json(name: str) -> Any:
@@ -459,6 +483,15 @@ def _warning(service_id: str, message: str) -> dict[str, Any]:
     }
 
 
+def _system_fault(service_id: str, exc: BaseException) -> dict[str, Any]:
+    """Return a visible, non-fatal fault event while retaining diagnostic detail."""
+    detail = str(exc).strip().replace("\r", " ").replace("\n", " ")[:300]
+    return _warning(
+        service_id,
+        f"[System Fault Alert] {type(exc).__name__}: {detail or 'operation failed'}",
+    )
+
+
 def _connector_for(source: str, environment: dict[str, Any], cache: dict[str, Any] | None = None):
     if cache is not None and source in cache:
         return cache[source]
@@ -512,7 +545,7 @@ def _run_profile(
         return [_warning(service_id, f"Unsupported source '{source}'.")]
     except Exception as exc:
         LOGGER.warning("Connector failure for %s: %s", service_id, exc)
-        return [_warning(service_id, "Connector unavailable; see application logs for details.")]
+        return [_system_fault(service_id, exc)]
 
 
 def create_app(configuration: RuntimeConfig | None = None) -> Flask:
@@ -526,9 +559,9 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
     try:
         runtime = configuration or load_runtime_config()
     except ConfigurationError as exc:
-        runtime = None
+        runtime = DEFAULT_RUNTIME
         config_error = str(exc)
-        LOGGER.error("Configuration error: %s", exc)
+        LOGGER.error("Configuration error; using safe fallback: %s", exc)
 
     app.config["RUNTIME_CONFIG"] = runtime
     app.config["CONFIG_ERROR"] = config_error
@@ -536,9 +569,9 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
         profiles = load_query_profiles()
         query_error = None
     except ConfigurationError as exc:
-        profiles = {}
+        profiles = DEFAULT_PROFILES
         query_error = str(exc)
-        LOGGER.error("Query profile error: %s", exc)
+        LOGGER.error("Query profile error; using safe fallback: %s", exc)
     app.config["QUERY_PROFILES"] = profiles
     app.config["QUERY_ERROR"] = query_error
     connector_cache: dict[str, Any] = {}
@@ -553,11 +586,11 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
 
     @app.get("/api/health")
     def health():
-        if config_error or query_error or runtime is None:
+        if config_error or query_error:
             return jsonify({
-                "status": "configuration_error",
+                "status": "safe_fallback",
                 "message": "; ".join(error for error in (config_error, query_error) if error),
-            }), 503
+            })
         return jsonify({"status": "ok", "environment": runtime.active_environment})
 
     @app.get("/api/schema/reflect")
@@ -595,8 +628,6 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
 
     @app.post("/api/trace/execute")
     def execute_trace():
-        if runtime is None:
-            return jsonify({"error": config_error}), 503
         payload = request.get_json(silent=True) or {}
         business_id = str(payload.get("business_id", "")).strip()
         if not re.fullmatch(
@@ -628,7 +659,12 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
             for service_id in service_ids
         }
         for future in as_completed(futures):
-            timeline.extend(future.result())
+            service_id = futures[future]
+            try:
+                timeline.extend(future.result())
+            except BaseException as exc:
+                LOGGER.exception("Unisolated trace failure for %s", service_id)
+                timeline.append(_system_fault(service_id, exc))
         timeline.sort(key=lambda item: (
             item.get("timestamp") is None,
             str(item.get("timestamp") or ""),
@@ -638,6 +674,25 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
             "business_id": business_id,
             "events": timeline[:MAX_TRACE_RESULTS],
             "warnings": [event for event in timeline if event.get("level") == "WARNING"],
+            "node_status": {
+                service_id: (
+                    "fault" if any(
+                        event.get("service") == service_id
+                        and (
+                            str(event.get("level", "")).upper() in {"ERROR", "CRITICAL"}
+                            or (
+                                str(event.get("level", "")).upper() == "WARNING"
+                                and "connector is disabled" not in str(event.get("message", "")).lower()
+                            )
+                            or "[System Fault Alert]" in str(event.get("message", ""))
+                        )
+                        for event in timeline
+                    )
+                    else "success" if any(event.get("service") == service_id for event in timeline)
+                    else "skipped"
+                )
+                for service_id in service_ids
+            },
         })
 
     @app.post("/api/report/pdf")

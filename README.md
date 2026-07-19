@@ -43,7 +43,7 @@ services to return partial timelines.
 | `config.json` | External environment and connector placeholders |
 | `query_templates.json` | Read-only, parameterized service query profiles |
 | `templates/index.html` | Self-contained offline dashboard shell |
-| `dev-log.spec` | PyInstaller one-file build definition |
+| `.github/workflows/release.yml` | Reproducible PyInstaller one-file build |
 | `.github/workflows/release.yml` | Windows `.exe` release on every `main` push |
 | `ROADMAP.md` | Six-phase delivery plan |
 | `RELEASE_NOTES.md` | Change history |
@@ -55,9 +55,17 @@ and creates a uniquely tagged GitHub release for each push to `main`. Locally:
 
 ```bash
 pip install -r requirements.txt pyinstaller
-pyinstaller --clean --noconfirm dev-log.spec
+pyinstaller --clean --noconfirm --onefile --windowed \
+  --add-data "templates:templates" --name "dev-log" app.py
 ```
 
-The resulting `dist/dev-log.exe` is a one-file executable. Runtime
+On Windows, use the required PyInstaller separator:
+
+```powershell
+pyinstaller --noconfirm --onefile --windowed --add-data "templates;templates" --name "dev-log" app.py
+```
+
+The resulting `dist/dev-log.exe` is a one-file executable. The HTML dashboard
+embeds its offline network runtime and therefore makes no CDN requests. Runtime
 configuration remains external so environments and credentials are not baked
 into the binary.

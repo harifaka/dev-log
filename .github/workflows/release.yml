@@ -21,7 +21,7 @@ jobs:
       - name: Install build dependencies
         run: python -m pip install --upgrade pip && pip install -r requirements.txt pyinstaller
       - name: Build portable executable
-        run: pyinstaller --clean --noconfirm dev-log.spec
+        run: pyinstaller --noconfirm --onefile --windowed --add-data "templates;templates" --name "dev-log" app.py
       - name: Create release on every main push
         env:
           GH_TOKEN: ${{ github.token }}
