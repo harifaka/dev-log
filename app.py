@@ -17,7 +17,7 @@ import threading
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
@@ -37,6 +37,7 @@ CONNECTOR_TIMEOUT_SECONDS = 5
 MAX_TRACE_RESULTS = 500
 MAX_RABBIT_MESSAGES = 10
 MAX_TRACE_WORKERS = 8
+MAX_BUSINESS_ID_LENGTH = 256
 SELECT_PATTERN = re.compile(r"^\s*SELECT\b", re.IGNORECASE)
 SQL_COMMENT_PATTERN = re.compile(r"(--|/\*|\*/|;)")
 PLACEHOLDER_PATTERN = re.compile(r"(?<!:):[A-Za-z_][A-Za-z0-9_]*|@[A-Za-z_][A-Za-z0-9_]*")
@@ -97,7 +98,6 @@ def _bounded_call(function: Callable[[], Any]) -> Any:
     try:
         return future.result(timeout=CONNECTOR_TIMEOUT_SECONDS)
     except Exception:
-        future.cancel()
         raise
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
@@ -186,8 +186,7 @@ class MSSQLAdapter:
             import pyodbc
             connection_string = self.settings.get("connection_string", "")
             connection_string += f";UID={self.settings.get('user', '')}"
-            credential_key = "pass" + "word"
-            connection_string += ";P" + "W" + "D=" + str(self.settings.get(credential_key, ""))
+            connection_string += ";P" + "W" + "D=" + str(self.settings.get("password", ""))
             connection_string += ";ApplicationIntent=ReadOnly"
             return pyodbc.connect(
                 connection_string,
@@ -234,7 +233,7 @@ class MSSQLAdapter:
 
     def query(self, query: str, business_id: str) -> list[dict[str, Any]]:
         validated_query = sanitize_select_query(query)
-        if "@business_id" not in validated_query:
+        if validated_query.count("@business_id") != 1:
             raise ConnectorError("MSSQL query must bind @business_id.")
         safe_query = re.sub(r"@business_id\b", "?", validated_query)
         return _bounded_call(lambda: self._execute(safe_query, (business_id,)))
@@ -262,6 +261,8 @@ class GraylogClient:
         try:
             import requests
             from requests.auth import HTTPBasicAuth
+            if '"' in query:
+                raise ConnectorError("Graylog query profiles may not contain double quotes.")
             safe_business_id = self._escape_query_value(business_id)
             safe_correlation_id = self._escape_query_value(correlation_id or business_id)
             search_query = query.replace("{business_id}", f'"{safe_business_id}"').replace(
@@ -439,7 +440,7 @@ def load_query_profiles() -> dict[str, dict[str, Any]]:
 
 def _warning(service_id: str, message: str) -> dict[str, Any]:
     return {
-        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "level": "WARNING",
         "message": f"{service_id}: {message}",
         "source": "dev-log",
@@ -587,7 +588,11 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
             return jsonify({"error": config_error}), 503
         payload = request.get_json(silent=True) or {}
         business_id = str(payload.get("business_id", "")).strip()
-        if not business_id or len(business_id) > 256 or any(ord(char) < 32 for char in business_id):
+        if (
+            not business_id
+            or len(business_id) > MAX_BUSINESS_ID_LENGTH
+            or any(ord(char) < 32 for char in business_id)
+        ):
             return jsonify({"error": "business_id is required and must be at most 256 characters."}), 400
         selected = payload.get("services")
         service_ids = (
