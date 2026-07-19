@@ -17,7 +17,7 @@ import threading
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
@@ -139,6 +139,7 @@ class OracleAdapter:
         def operation():
             with self._get_pool().acquire() as connection:
                 with connection.cursor() as cursor:
+                    connection.rollback()
                     cursor.execute("SET TRANSACTION READ ONLY")
                     cursor.execute(safe_query, business_id=business_id)
                     columns = [item[0].lower() for item in cursor.description or ()]
@@ -158,6 +159,7 @@ class OracleAdapter:
         def operation():
             with self._get_pool().acquire() as connection:
                 with connection.cursor() as cursor:
+                    connection.rollback()
                     cursor.execute("SET TRANSACTION READ ONLY")
                     cursor.execute(
                         "SELECT column_name FROM all_tab_columns "
@@ -449,7 +451,7 @@ def load_query_profiles() -> dict[str, dict[str, Any]]:
 
 def _warning(service_id: str, message: str) -> dict[str, Any]:
     return {
-        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
         "level": "WARNING",
         "message": f"{service_id}: {message}",
         "source": "dev-log",
