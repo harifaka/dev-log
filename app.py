@@ -475,22 +475,23 @@ def load_query_profiles() -> dict[str, dict[str, Any]]:
     return {key: value for key, value in profiles.items() if isinstance(value, dict)}
 
 
-def _warning(service_id: str, message: str) -> dict[str, Any]:
+def _warning(service_id: str, message: str, **metadata: Any) -> dict[str, Any]:
     return {
         "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
         "level": "WARNING",
         "message": f"{service_id}: {message}",
         "source": "dev-log",
         "fields": {"service": service_id},
+        **metadata,
     }
 
 
-def _system_fault(service_id: str, exc: BaseException) -> dict[str, Any]:
-    """Return a visible, non-fatal fault event while retaining diagnostic detail."""
-    detail = str(exc).strip().replace("\r", " ").replace("\n", " ")[:300]
+def _system_fault(service_id: str, exc: Exception) -> dict[str, Any]:
+    """Return a visible, non-fatal fault event without exposing connector details."""
     return _warning(
         service_id,
-        f"[System Fault Alert] {type(exc).__name__}: {detail or 'operation failed'}",
+        f"[System Fault Alert] {type(exc).__name__}: connector operation failed",
+        is_system_fault=True,
     )
 
 
@@ -527,7 +528,7 @@ def _run_profile(
     try:
         connector = _connector_for(str(source), environment, connector_cache)
         if connector is None:
-            return [_warning(service_id, f"{source} connector is disabled.")]
+            return [_warning(service_id, f"{source} connector is disabled.", skipped=True)]
         if source in {"oracle", "mssql"}:
             return [
                 {**event, "service": service_id}
@@ -664,7 +665,7 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
             service_id = futures[future]
             try:
                 timeline.extend(future.result())
-            except BaseException as exc:
+            except Exception as exc:
                 LOGGER.exception("Unisolated trace failure for %s", service_id)
                 timeline.append(_system_fault(service_id, exc))
         timeline.sort(key=lambda item: (
@@ -682,11 +683,9 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
                         event.get("service") == service_id
                         and (
                             str(event.get("level", "")).upper() in {"ERROR", "CRITICAL"}
-                            or (
-                                str(event.get("level", "")).upper() == "WARNING"
-                                and "connector is disabled" not in str(event.get("message", "")).lower()
-                            )
-                            or "[System Fault Alert]" in str(event.get("message", ""))
+                            or str(event.get("level", "")).upper() == "WARNING"
+                            and not event.get("skipped", False)
+                            or event.get("is_system_fault", False)
                         )
                         for event in timeline
                     )

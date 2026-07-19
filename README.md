@@ -43,8 +43,7 @@ services to return partial timelines.
 | `config.json` | External environment and connector placeholders |
 | `query_templates.json` | Read-only, parameterized service query profiles |
 | `templates/index.html` | Self-contained offline dashboard shell |
-| `.github/workflows/release.yml` | Reproducible PyInstaller one-file build |
-| `.github/workflows/release.yml` | Windows `.exe` release on every `main` push |
+| `.github/workflows/release.yml` | Reproducible Windows `.exe` one-file build on every `main` push |
 | `ROADMAP.md` | Six-phase delivery plan |
 | `RELEASE_NOTES.md` | Change history |
 
