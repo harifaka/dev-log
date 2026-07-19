@@ -166,6 +166,7 @@ class OracleAdapter:
         return self.pool
 
     def query(self, query: str, parameters: tuple[Any, ...]) -> list[dict[str, Any]]:
+        """Run a sanitized SELECT using positional bound parameters."""
         safe_query = sanitize_select_query(query)
 
         def operation():
@@ -298,6 +299,8 @@ class GraylogClient:
         try:
             import requests
             from requests.auth import HTTPBasicAuth
+            # Allow Graylog/Lucene field names, quoted phrases, ranges, booleans, and wildcards.
+            # Disallows newlines, backslashes, and any other characters that could escape the query context.
             if not re.fullmatch(r"[A-Za-z0-9_:\s(){}./\[\]@+\-&|!^=\"']+", query):
                 raise ConnectorError("Graylog query profile contains unsupported syntax.")
             safe_business_id = self._escape_query_value(business_id)
@@ -524,7 +527,12 @@ def load_query_profiles() -> dict[str, dict[str, Any]]:
 
 
 def _escape_like_pattern(value: str) -> str:
-    """Escape LIKE wildcards and return a safe padded pattern."""
+    """Escape LIKE wildcards and return a safe padded pattern.
+
+    Backslash is escaped first so the subsequent escapes are not themselves
+    escaped, keeping the escape character semantics consistent for the
+    database driver.
+    """
     escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"%{escaped}%"
 
@@ -653,6 +661,10 @@ def extract_correlation_id(
     if match and match.lastindex and match.lastindex >= 1:
         return match.group(1)
     if match:
+        # The regex matched but has no capturing group; return the whole match
+        # so callers still get a token, but operators should prefer patterns
+        # with a capture group for cleaner results.
+        LOGGER.warning("correlation_extractor_regex matched without a capture group")
         return match.group(0)
     return None
 
@@ -836,9 +848,13 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
         search_id = str(payload.get("search_id", "")).strip()
 
         # If the legacy business_id field is sent, treat it as a gateway lookup
-        # to preserve backwards compatibility with older clients.
+        # to preserve backwards compatibility with older clients.  The legacy
+        # mapping is configurable by ensuring a "gateway" service exists in
+        # query_templates.json; otherwise the request falls back to a 400.
         legacy_business_id = str(payload.get("business_id", "")).strip()
         if not requested_service and legacy_business_id:
+            if "gateway" not in profiles:
+                return jsonify({"error": "Legacy business_id mapping unavailable."}), 400
             requested_service = "gateway"
             search_id = legacy_business_id
 

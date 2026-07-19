@@ -71,7 +71,7 @@
         <button type="submit" id="investigate-btn">Investigate</button>
       </div>
       <span id="inv-status" class="muted" aria-live="polite"></span>
-      <span id="expected-format" class="muted format-hint">Select an ingress service to see the expected input format.</span>
+      <span id="expected_format" class="muted format-hint">Select an ingress service to see the expected input format.</span>
     </form>
     <div class="grid">
       <section class="panel">
@@ -165,7 +165,7 @@
     const sidInput    = document.getElementById('search-id');
     const envSelect   = document.getElementById('environment');
     const statusEl    = document.getElementById('inv-status');
-    const formatEl    = document.getElementById('expected-format');
+    const formatEl    = document.getElementById('expected_format');
     const consoleEl   = document.getElementById('console');
     const evtCountEl  = document.getElementById('evt-count');
     const networkEl   = document.getElementById('pipeline-network');
@@ -175,7 +175,7 @@
     const allBtn      = document.getElementById('all-btn');
 
     let allEvents = [], activeFilter = null, lastSid = '', lastSvc = '', lastEnv = '', network = null;
-    let currentStrategy = {validation_regex: '', expected_format: '', allow_raw_regex_queries: false};
+    let currentStrategy = {validation_regex: '', expected_format: '', allow_raw_regex_queries: false, case_sensitive: false};
 
     function setStatus(msg, err) {
       statusEl.textContent = msg;
@@ -278,7 +278,7 @@
     function validateClientInput(value) {
       if (!value) return 'Enter a search identifier.';
       if (currentStrategy.allow_raw_regex_queries) {
-        try { new RegExp(value); } catch (e) { return 'Invalid regular expression: ' + (e.message || 'invalid pattern'); }
+        try { new RegExp(value); } catch (e) { return `Invalid regular expression: ${e.message || 'invalid pattern'}`; }
         return '';
       }
       const pattern = currentStrategy.validation_regex;
