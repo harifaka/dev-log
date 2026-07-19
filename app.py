@@ -411,16 +411,21 @@ class RabbitMQInspector:
 
 def resource_path(name: str) -> Path:
     """Resolve a bundled resource for source runs and PyInstaller one-files."""
+    relative_name = Path(name)
+    if relative_name.is_absolute() or ".." in relative_name.parts:
+        raise ValueError("Resource names must be relative and contained.")
     bundle_root = Path(getattr(sys, "_MEIPASS", BASE_DIR))
     external_root = Path.cwd()
-    executable_root = Path(sys.executable).resolve().parent
+    executable_root = Path(
+        sys.argv[0] if getattr(sys, "frozen", False) else sys.executable
+    ).resolve().parent
     # The current working directory wins, allowing an executable's config to
     # be edited without unpacking or rebuilding it.
     for root in (external_root, executable_root, bundle_root):
-        candidate = (root / name).resolve()
+        candidate = (root / relative_name).resolve()
         if candidate.exists():
             return candidate
-    return (bundle_root / name).resolve()
+    return (bundle_root / relative_name).resolve()
 
 
 def load_json(name: str) -> Any:

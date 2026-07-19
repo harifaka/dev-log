@@ -93,7 +93,10 @@
     'use strict';
     window.vis = window.vis || {};
     window.vis.DataSet = class {
-      constructor(items) { this.items = new Map((items || []).map(item => [item.id, item])); }
+      constructor(items) {
+        this.items = new Map((items || []).filter(item => item && item.id != null)
+          .map(item => [item.id, item]));
+      }
       get() { return [...this.items.values()]; }
     };
     window.vis.Network = class {
@@ -106,6 +109,10 @@
         const width = 900, height = 260, pad = 55, positions = new Map();
         const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
         svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+        if (!nodes.length) {
+          this.container.textContent = 'No pipeline services configured.';
+          return;
+        }
         nodes.forEach((node, index) => positions.set(node.id, {
           x: nodes.length === 1 ? width / 2 : pad + index * (width - pad * 2) / (nodes.length - 1),
           y: height / 2
