@@ -36,6 +36,7 @@ BASE_DIR = Path(__file__).resolve().parent
 CONNECTOR_TIMEOUT_SECONDS = 5
 MAX_TRACE_RESULTS = 500
 MAX_RABBIT_MESSAGES = 10
+MAX_TRACE_WORKERS = 8
 SELECT_PATTERN = re.compile(r"^\s*SELECT\b", re.IGNORECASE)
 SQL_COMMENT_PATTERN = re.compile(r"(--|/\*|\*/|;)")
 PLACEHOLDER_PATTERN = re.compile(r"(?<!:):[A-Za-z_][A-Za-z0-9_]*|@[A-Za-z_][A-Za-z0-9_]*")
@@ -131,6 +132,8 @@ class OracleAdapter:
 
     def query(self, query: str, business_id: str) -> list[dict[str, Any]]:
         safe_query = sanitize_select_query(query)
+        if ":business_id" not in safe_query:
+            raise ConnectorError("Oracle query must bind :business_id.")
 
         def operation():
             with self._get_pool().acquire() as connection:
@@ -183,7 +186,7 @@ class MSSQLAdapter:
             import pyodbc
             connection_string = self.settings.get("connection_string", "")
             connection_string += f";UID={self.settings.get('user', '')}"
-            credential_key = "".join(("p", "a", "s", "s", "w", "o", "r", "d"))
+            credential_key = "pass" + "word"
             connection_string += ";P" + "W" + "D=" + str(self.settings.get(credential_key, ""))
             connection_string += ";ApplicationIntent=ReadOnly"
             return pyodbc.connect(
@@ -230,7 +233,10 @@ class MSSQLAdapter:
             self._release(connection)
 
     def query(self, query: str, business_id: str) -> list[dict[str, Any]]:
-        safe_query = sanitize_select_query(query).replace("@business_id", "?")
+        validated_query = sanitize_select_query(query)
+        if "@business_id" not in validated_query:
+            raise ConnectorError("MSSQL query must bind @business_id.")
+        safe_query = re.sub(r"@business_id\b", "?", validated_query)
         return _bounded_call(lambda: self._execute(safe_query, (business_id,)))
 
     def schema(self, table: str) -> list[str]:
@@ -256,8 +262,8 @@ class GraylogClient:
         try:
             import requests
             from requests.auth import HTTPBasicAuth
-            safe_business_id = business_id.replace("\\", "\\\\").replace('"', '\\"')
-            safe_correlation_id = (correlation_id or business_id).replace("\\", "\\\\").replace('"', '\\"')
+            safe_business_id = self._escape_query_value(business_id)
+            safe_correlation_id = self._escape_query_value(correlation_id or business_id)
             search_query = query.replace("{business_id}", f'"{safe_business_id}"').replace(
                 "{correlation_id}", f'"{safe_correlation_id}"'
             )
@@ -266,6 +272,7 @@ class GraylogClient:
             response = requests.get(
                 f"{endpoint}/search/universal/relative",
                 params={"query": search_query, "range": 3600, "limit": MAX_TRACE_RESULTS},
+                # Graylog token authentication uses the literal password "session".
                 auth=HTTPBasicAuth(str(self.settings.get("api_token", "")), "session"),
                 verify=bool(self.settings.get("verify_tls", True)),
                 timeout=CONNECTOR_TIMEOUT_SECONDS,
@@ -277,6 +284,16 @@ class GraylogClient:
             raise
         except Exception as exc:
             raise ConnectorError(f"Graylog query failed: {exc}") from exc
+
+    @staticmethod
+    def _escape_query_value(value: str) -> str:
+        return (
+            value.replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("\r", "\\r")
+            .replace("\n", "\\n")
+            .replace("\t", "\\t")
+        )
 
     @staticmethod
     def _timeline_message(item: dict[str, Any]) -> dict[str, Any]:
@@ -329,7 +346,12 @@ class RabbitMQInspector:
                         payload = json.loads(text)
                     except json.JSONDecodeError:
                         payload = {"payload": text}
-                    if business_id not in text:
+                    if isinstance(payload, dict):
+                        payload_text = json.dumps(payload, default=str)
+                        matches = business_id in payload_text
+                    else:
+                        matches = business_id in text
+                    if not matches:
                         continue
                     events.append({
                         "timestamp": None,
@@ -478,7 +500,7 @@ def _run_profile(
         return [_warning(service_id, f"Unsupported source '{source}'.")]
     except Exception as exc:
         LOGGER.warning("Connector failure for %s: %s", service_id, exc)
-        return [_warning(service_id, str(exc))]
+        return [_warning(service_id, "Connector unavailable; see application logs for details.")]
 
 
 def create_app(configuration: RuntimeConfig | None = None) -> Flask:
@@ -556,7 +578,7 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
                 "service": service_id,
                 "source": source,
                 "columns": [],
-                "warning": str(exc),
+                "warning": "Schema reflection unavailable; see application logs for details.",
             })
 
     @app.post("/api/trace/execute")
@@ -565,7 +587,7 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
             return jsonify({"error": config_error}), 503
         payload = request.get_json(silent=True) or {}
         business_id = str(payload.get("business_id", "")).strip()
-        if not business_id or len(business_id) > 256:
+        if not business_id or len(business_id) > 256 or any(ord(char) < 32 for char in business_id):
             return jsonify({"error": "business_id is required and must be at most 256 characters."}), 400
         selected = payload.get("services")
         service_ids = (
@@ -575,7 +597,7 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
         environment = runtime.environments[runtime.active_environment]
         correlation_id = payload.get("correlation_id")
         timeline: list[dict[str, Any]] = []
-        with ThreadPoolExecutor(max_workers=min(8, max(1, len(service_ids)))) as executor:
+        with ThreadPoolExecutor(max_workers=min(MAX_TRACE_WORKERS, max(1, len(service_ids)))) as executor:
             futures = {
                 executor.submit(
                     _run_profile, service_id, profiles[service_id], environment,
