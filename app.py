@@ -29,7 +29,11 @@ BASE_DIR = Path(__file__).resolve().parent
 
 
 class ConfigurationError(RuntimeError):
-    """Raised when an operator-editable configuration cannot be loaded."""
+    """Raised while parsing config.json or validating its operator settings.
+
+    The application catches this error at startup and keeps the dashboard
+    available so an operator can correct the external file without a traceback.
+    """
 
 
 @dataclass(frozen=True)
@@ -116,7 +120,7 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
 
     @app.get("/api/health")
     def health():
-        if config_error:
+        if config_error or runtime is None:
             return jsonify({"status": "configuration_error", "message": config_error}), 503
         return jsonify({"status": "ok", "environment": runtime.active_environment})
 
