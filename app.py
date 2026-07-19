@@ -165,7 +165,7 @@ class OracleAdapter:
                 raise ConnectorError(f"Oracle connection unavailable: {exc}") from exc
         return self.pool
 
-    def query(self, query: str, parameters: dict[str, Any]) -> list[dict[str, Any]]:
+    def query(self, query: str, parameters: tuple[Any, ...]) -> list[dict[str, Any]]:
         safe_query = sanitize_select_query(query)
 
         def operation():
@@ -245,7 +245,7 @@ class MSSQLAdapter:
                 return
         connection.close()
 
-    def _execute(self, query: str, parameters: dict[str, Any] | tuple[Any, ...], schema: bool = False):
+    def _execute(self, query: str, parameters: tuple[Any, ...], schema: bool = False):
         connection = self._acquire()
         try:
             cursor = connection.cursor()
@@ -271,7 +271,7 @@ class MSSQLAdapter:
         finally:
             self._release(connection)
 
-    def query(self, query: str, parameters: dict[str, Any]) -> list[dict[str, Any]]:
+    def query(self, query: str, parameters: tuple[Any, ...]) -> list[dict[str, Any]]:
         validated_query = sanitize_select_query(query)
         return _bounded_call(lambda: self._execute(validated_query, parameters))
 
@@ -298,7 +298,7 @@ class GraylogClient:
         try:
             import requests
             from requests.auth import HTTPBasicAuth
-            if not re.fullmatch(r"[A-Za-z0-9_:\s(){}./\[\]@+\-&|!^=\"'-]+", query):
+            if not re.fullmatch(r"[A-Za-z0-9_:\s(){}./\[\]@+\-&|!^=\"'\-]+", query):
                 raise ConnectorError("Graylog query profile contains unsupported syntax.")
             safe_business_id = self._escape_query_value(business_id)
             safe_correlation_id = self._escape_query_value(correlation_id or business_id)
@@ -523,46 +523,57 @@ def load_query_profiles() -> dict[str, dict[str, Any]]:
     return loaded
 
 
-def compile_strategy_query(profile: dict[str, Any], search_id: str, correlation_id: str | None) -> tuple[str, dict[str, Any]]:
-    """Return a parameterized query and a parameter map for the configured source.
+def _escape_like_pattern(value: str) -> str:
+    """Escape LIKE wildcards and return a safe padded pattern."""
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def compile_strategy_query(
+    profile: dict[str, Any], search_id: str, correlation_id: str | None
+) -> tuple[str, tuple[Any, ...]]:
+    """Return a parameterized SQL query and a positional parameter tuple.
 
     The identification_strategy.query template may contain:
       - :business_id / @business_id / :correlation_id for SQL-like sources
       - :search_id_like for LIKE-safe partial matching
-      - {business_id} / {correlation_id} for Graylog-style template sources
+    Placeholders are replaced positionally so the returned tuple matches the
+    order of the '?' placeholders in the compiled query.
     """
     strategy = profile.get("identification_strategy", {})
     query_template = str(strategy.get("query", ""))
-    id_type = strategy.get("id_type")
     source = profile.get("source")
 
-    like_value = f"%{search_id}%"
+    like_value = _escape_like_pattern(search_id)
     safe_correlation = str(correlation_id) if correlation_id else search_id
 
     if source in {"oracle", "mssql"}:
+        substitutions: list[tuple[str, Any]] = [
+            (":search_id_like", like_value),
+            ("@search_id_like", like_value),
+            (":business_id", search_id),
+            ("@business_id", search_id),
+            (":correlation_id", safe_correlation),
+            ("@correlation_id", safe_correlation),
+        ]
         safe_query = query_template
-        for old, new in (
-            (":search_id_like", "?"),
-            ("@search_id_like", "?"),
-            (":business_id", "?"),
-            ("@business_id", "?"),
-            (":correlation_id", "?"),
-            ("@correlation_id", "?"),
-        ):
-            safe_query = safe_query.replace(old, new)
-        params: dict[str, Any] = {"search_id": search_id, "like_value": like_value, "correlation_id": safe_correlation}
-        return safe_query, params
+        params: list[Any] = []
+        for old, value in substitutions:
+            while old in safe_query:
+                safe_query = safe_query.replace(old, "?", 1)
+                params.append(value)
+        return safe_query, tuple(params)
 
     if source == "graylog":
         return (
             query_template.replace("{business_id}", search_id).replace(
                 "{correlation_id}", safe_correlation
             ),
-            {},
+            (),
         )
 
     if source == "rabbitmq":
-        return query_template.replace("{business_id}", search_id), {}
+        return query_template.replace("{business_id}", search_id), ()
 
     raise ConnectorError(f"Unsupported source '{source}' for query compilation.")
 
@@ -708,7 +719,7 @@ def _run_profile(
         if source == "graylog":
             return [
                 {**event, "service": service_id}
-                for event in connector.search(compiled_query, search_id, correlation_id)
+                for event in connector.search(str(profile.get("query", "")), search_id, correlation_id)
             ]
         if source == "rabbitmq":
             queue = str(profile.get("queue", ""))

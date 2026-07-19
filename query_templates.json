@@ -78,7 +78,7 @@
         "expected_format": "Numeric fragment or SKU token",
         "validation_regex": "^\\d{3,}$",
         "case_sensitive": false,
-        "query": "SELECT event_time, level, message, correlation_id, sku FROM inventory_logs WHERE order_id LIKE :search_id_like OR sku LIKE :search_id_like ORDER BY event_time",
+        "query": "SELECT event_time, level, message, correlation_id, sku FROM inventory_logs WHERE order_id LIKE :search_id_like ESCAPE '\\' OR sku LIKE :search_id_like ESCAPE '\\' ORDER BY event_time",
         "correlation_extractor_regex": "(?i)(?:correlation[-_]?id|trace[-_]?id|batch[-_]?id)[\\s>\"\\']*[:=]?[\\s]*[\"\\']?([a-z0-9-]{4,})"
       }
     },
