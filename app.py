@@ -185,6 +185,7 @@ class MSSQLAdapter:
             connection_string += f";UID={self.settings.get('user', '')}"
             credential_key = "".join(("p", "a", "s", "s", "w", "o", "r", "d"))
             connection_string += ";P" + "W" + "D=" + str(self.settings.get(credential_key, ""))
+            connection_string += ";ApplicationIntent=ReadOnly"
             return pyodbc.connect(
                 connection_string,
                 timeout=CONNECTOR_TIMEOUT_SECONDS,
@@ -255,8 +256,10 @@ class GraylogClient:
         try:
             import requests
             from requests.auth import HTTPBasicAuth
-            search_query = query.replace("{business_id}", business_id).replace(
-                "{correlation_id}", correlation_id or business_id
+            safe_business_id = business_id.replace("\\", "\\\\").replace('"', '\\"')
+            safe_correlation_id = (correlation_id or business_id).replace("\\", "\\\\").replace('"', '\\"')
+            search_query = query.replace("{business_id}", f'"{safe_business_id}"').replace(
+                "{correlation_id}", f'"{safe_correlation_id}"'
             )
             base = str(self.settings.get("url", "")).rstrip("/")
             endpoint = base if base.endswith("/api") else f"{base}/api"
@@ -306,39 +309,41 @@ class RabbitMQInspector:
             parameters.connection_attempts = 1
             parameters.blocked_connection_timeout = CONNECTOR_TIMEOUT_SECONDS
             connection = pika.BlockingConnection(parameters)
-            channel = connection.channel()
-            depth = channel.queue_declare(queue=queue, passive=True).method.message_count
-            events = [{
-                "timestamp": None,
-                "level": "INFO",
-                "message": f"RabbitMQ queue depth: {depth}",
-                "source": "rabbitmq",
-                "fields": {"queue": queue, "depth": depth},
-            }]
-            for _ in range(MAX_RABBIT_MESSAGES):
-                method, properties, body = channel.basic_get(queue=queue, auto_ack=False)
-                if method is None:
-                    break
-                channel.basic_nack(method.delivery_tag, requeue=True)
-                text = body.decode("utf-8", errors="replace")
-                try:
-                    payload = json.loads(text)
-                except json.JSONDecodeError:
-                    payload = {"payload": text}
-                if business_id not in text:
-                    continue
-                events.append({
+            try:
+                channel = connection.channel()
+                depth = channel.queue_declare(queue=queue, passive=True).method.message_count
+                events = [{
                     "timestamp": None,
                     "level": "INFO",
-                    "message": "Matching RabbitMQ DLQ payload sampled.",
+                    "message": f"RabbitMQ queue depth: {depth}",
                     "source": "rabbitmq",
-                    "fields": {"queue": queue, "payload": payload, "properties": {
-                        "content_type": getattr(properties, "content_type", None),
-                        "message_id": getattr(properties, "message_id", None),
-                    }},
-                })
-            connection.close()
-            return events
+                    "fields": {"queue": queue, "depth": depth},
+                }]
+                for _ in range(MAX_RABBIT_MESSAGES):
+                    method, properties, body = channel.basic_get(queue=queue, auto_ack=False)
+                    if method is None:
+                        break
+                    channel.basic_nack(method.delivery_tag, requeue=True)
+                    text = body.decode("utf-8", errors="replace")
+                    try:
+                        payload = json.loads(text)
+                    except json.JSONDecodeError:
+                        payload = {"payload": text}
+                    if business_id not in text:
+                        continue
+                    events.append({
+                        "timestamp": None,
+                        "level": "INFO",
+                        "message": "Matching RabbitMQ DLQ payload sampled.",
+                        "source": "rabbitmq",
+                        "fields": {"queue": queue, "payload": payload, "properties": {
+                            "content_type": getattr(properties, "content_type", None),
+                            "message_id": getattr(properties, "message_id", None),
+                        }},
+                    })
+                return events
+            finally:
+                connection.close()
 
         try:
             return _bounded_call(operation)
@@ -420,19 +425,25 @@ def _warning(service_id: str, message: str) -> dict[str, Any]:
     }
 
 
-def _connector_for(source: str, environment: dict[str, Any]):
+def _connector_for(source: str, environment: dict[str, Any], cache: dict[str, Any] | None = None):
+    if cache is not None and source in cache:
+        return cache[source]
     settings = environment.get(source)
     if not isinstance(settings, dict) or not settings.get("enabled", False):
         return None
     if source == "oracle":
-        return OracleAdapter(settings)
-    if source == "mssql":
-        return MSSQLAdapter(settings)
-    if source == "graylog":
-        return GraylogClient(settings)
-    if source == "rabbitmq":
-        return RabbitMQInspector(settings)
-    raise ConnectorError(f"Unsupported connector source '{source}'.")
+        connector = OracleAdapter(settings)
+    elif source == "mssql":
+        connector = MSSQLAdapter(settings)
+    elif source == "graylog":
+        connector = GraylogClient(settings)
+    elif source == "rabbitmq":
+        connector = RabbitMQInspector(settings)
+    else:
+        raise ConnectorError(f"Unsupported connector source '{source}'.")
+    if cache is not None:
+        cache[source] = connector
+    return connector
 
 
 def _run_profile(
@@ -441,10 +452,11 @@ def _run_profile(
     environment: dict[str, Any],
     business_id: str,
     correlation_id: str | None,
+    connector_cache: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     source = profile.get("source")
     try:
-        connector = _connector_for(str(source), environment)
+        connector = _connector_for(str(source), environment, connector_cache)
         if connector is None:
             return [_warning(service_id, f"{source} connector is disabled.")]
         if source in {"oracle", "mssql"}:
@@ -495,6 +507,7 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
         LOGGER.error("Query profile error: %s", exc)
     app.config["QUERY_PROFILES"] = profiles
     app.config["QUERY_ERROR"] = query_error
+    connector_cache: dict[str, Any] = {}
 
     @app.get("/")
     def dashboard():
@@ -525,7 +538,9 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
         if source not in {"oracle", "mssql"}:
             return jsonify({"service": service_id, "source": source, "columns": []})
         try:
-            connector = _connector_for(source, runtime.environments[runtime.active_environment])
+            connector = _connector_for(
+                source, runtime.environments[runtime.active_environment], connector_cache
+            )
             if connector is None:
                 return jsonify({
                     "service": service_id,
@@ -564,7 +579,7 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
             futures = {
                 executor.submit(
                     _run_profile, service_id, profiles[service_id], environment,
-                    business_id, str(correlation_id) if correlation_id else None,
+                    business_id, str(correlation_id) if correlation_id else None, connector_cache,
                 ): service_id
                 for service_id in service_ids
             }
