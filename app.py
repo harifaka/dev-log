@@ -529,9 +529,10 @@ def load_query_profiles() -> dict[str, dict[str, Any]]:
 def _escape_like_pattern(value: str) -> str:
     """Escape LIKE wildcards and return a safe padded pattern.
 
-    Backslash is escaped first so the subsequent escapes are not themselves
-    escaped, keeping the escape character semantics consistent for the
-    database driver.
+    Backslash is escaped first so literal backslashes in the input are
+    preserved and do not accidentally escape the subsequent '%' and '_'
+    escapes.  Each remaining '%'/'_' is turned into a literal character by
+    prefixing it with a backslash, which the ESCAPE '\\' clause interprets.
     """
     escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"%{escaped}%"
@@ -602,7 +603,7 @@ def validate_search_id(service_id: str, profile: dict[str, Any], search_id: str,
         try:
             re.compile(search_id)
         except re.error as exc:
-            return False, f"Invalid regular expression: {exc.msg}"
+            return False, f"Invalid regular expression: {exc}"
         return True, ""
     pattern = str(strategy.get("validation_regex", ""))
     case_sensitive = bool(strategy.get("case_sensitive", False))
@@ -658,13 +659,16 @@ def extract_correlation_id(
         text = str(payload)
 
     match = compiled.search(text)
+    service_label = str(profile.get("display_name") or profile.get("id") or "unknown")
     if match and match.lastindex and match.lastindex >= 1:
         return match.group(1)
     if match:
         # The regex matched but has no capturing group; return the whole match
         # so callers still get a token, but operators should prefer patterns
         # with a capture group for cleaner results.
-        LOGGER.warning("correlation_extractor_regex matched without a capture group")
+        LOGGER.warning(
+            "correlation_extractor_regex for %s matched without a capture group", service_label
+        )
         return match.group(0)
     return None
 
