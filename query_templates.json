@@ -1,70 +1,165 @@
 {
-  "schema_version": 1,
-  "description": "Read-only, named query profiles. Values are bound parameters, never string interpolated.",
+  "schema_version": 2,
+  "description": "Template-driven, read-only query profiles. Identification strategies, validation rules, and correlation extractors are declared per service and referenced dynamically by app.py.",
   "services": {
     "gateway": {
       "display_name": "API Gateway",
       "source": "graylog",
       "table": "gateway_logs",
-      "business_id_fields": ["order_id", "payload_id"],
-      "correlation_fields": ["correlation_id", "trace_id"],
-      "query": "SELECT event_time, level, message, correlation_id, order_id FROM gateway_logs WHERE order_id = :business_id ORDER BY event_time"
+      "business_id_fields": [
+        "order_id",
+        "payload_id"
+      ],
+      "correlation_fields": [
+        "correlation_id",
+        "trace_id"
+      ],
+      "identification_strategy": {
+        "id_type": "strict_numeric",
+        "expected_format": "7-10 digit Numeric ID",
+        "validation_regex": "^\\d{7,10}$",
+        "case_sensitive": false,
+        "query": "SELECT event_time, level, message, correlation_id, order_id FROM gateway_logs WHERE order_id = :business_id ORDER BY event_time",
+        "correlation_extractor_regex": "(?i)(?:correlation[-_]?id|trace[-_]?id)[\\s>\"\\']*[:=]?[\\s]*[\"\\']?([a-z0-9-]{4,})"
+      }
     },
     "orders": {
       "display_name": "Order Service",
       "source": "oracle",
       "table": "order_logs",
-      "business_id_fields": ["order_id"],
-      "correlation_fields": ["correlation_id"],
-      "query": "SELECT event_time, level, message, correlation_id, order_id FROM order_logs WHERE order_id = :business_id ORDER BY event_time"
+      "business_id_fields": [
+        "order_id"
+      ],
+      "correlation_fields": [
+        "correlation_id"
+      ],
+      "identification_strategy": {
+        "id_type": "strict_numeric",
+        "expected_format": "7-10 digit Numeric ID",
+        "validation_regex": "^\\d{7,10}$",
+        "case_sensitive": false,
+        "query": "SELECT event_time, level, message, correlation_id, order_id FROM order_logs WHERE order_id = :business_id ORDER BY event_time",
+        "correlation_extractor_regex": "(?i)(?:correlation[-_]?id|trace[-_]?id)[\\s>\"\\']*[:=]?[\\s]*[\"\\']?([a-z0-9-]{4,})"
+      }
     },
     "payments": {
       "display_name": "Payment Service",
       "source": "oracle",
       "table": "payment_logs",
-      "business_id_fields": ["order_id", "payment_id"],
-      "correlation_fields": ["correlation_id"],
-      "query": "SELECT event_time, level, message, correlation_id, payment_id FROM payment_logs WHERE order_id = :business_id ORDER BY event_time"
+      "business_id_fields": [
+        "order_id",
+        "payment_id"
+      ],
+      "correlation_fields": [
+        "correlation_id"
+      ],
+      "identification_strategy": {
+        "id_type": "uuid",
+        "expected_format": "UUID v4",
+        "validation_regex": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+        "case_sensitive": false,
+        "query": "SELECT event_time, level, message, correlation_id, payment_id FROM payment_logs WHERE order_id = :business_id ORDER BY event_time",
+        "correlation_extractor_regex": "(?i)(?:correlation[-_]?id|payment[-_]?id)[\\s>\"\\']*[:=]?[\\s]*[\"\\']?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
+      }
     },
     "inventory": {
       "display_name": "Inventory Service",
       "source": "mssql",
       "table": "inventory_logs",
-      "business_id_fields": ["order_id", "sku"],
-      "correlation_fields": ["correlation_id"],
-      "query": "SELECT event_time, level, message, correlation_id, sku FROM inventory_logs WHERE order_id = @business_id ORDER BY event_time"
+      "business_id_fields": [
+        "order_id",
+        "sku"
+      ],
+      "correlation_fields": [
+        "correlation_id"
+      ],
+      "identification_strategy": {
+        "id_type": "partial_match",
+        "expected_format": "Numeric fragment or SKU token",
+        "validation_regex": "^\\d{3,}$",
+        "case_sensitive": false,
+        "query": "SELECT event_time, level, message, correlation_id, sku FROM inventory_logs WHERE (order_id LIKE :search_id_like ESCAPE '\\' OR sku LIKE :search_id_like ESCAPE '\\') ORDER BY event_time",
+        "query_notes": "The backslash escape character is required by the ESCAPE clause so user-supplied % and _ characters are treated as literals rather than wildcards.",
+        "correlation_extractor_regex": "(?i)(?:correlation[-_]?id|trace[-_]?id|batch[-_]?id)[\\s>\"\\']*[:=]?[\\s]*[\"\\']?([a-z0-9-]{4,})"
+      }
     },
     "shipping": {
       "display_name": "Shipping Service",
       "source": "mssql",
       "table": "shipping_logs",
-      "business_id_fields": ["order_id", "shipment_id"],
-      "correlation_fields": ["correlation_id"],
-      "query": "SELECT event_time, level, message, correlation_id, shipment_id FROM shipping_logs WHERE order_id = @business_id ORDER BY event_time"
+      "business_id_fields": [
+        "order_id",
+        "shipment_id"
+      ],
+      "correlation_fields": [
+        "correlation_id"
+      ],
+      "identification_strategy": {
+        "id_type": "strict_numeric",
+        "expected_format": "7-10 digit Numeric ID",
+        "validation_regex": "^\\d{7,10}$",
+        "case_sensitive": false,
+        "query": "SELECT event_time, level, message, correlation_id, shipment_id FROM shipping_logs WHERE order_id = @business_id ORDER BY event_time",
+        "correlation_extractor_regex": "(?i)(?:correlation[-_]?id|shipment[-_]?id)[\\s>\"\\']*[:=]?[\\s]*[\"\\']?([a-z0-9-]{4,})"
+      }
     },
     "notifications": {
       "display_name": "Notification Service",
       "source": "graylog",
       "stream": "notifications",
-      "business_id_fields": ["order_id"],
-      "correlation_fields": ["correlation_id"],
-      "query": "service:notifications AND (order_id:{business_id} OR correlation_id:{correlation_id})"
+      "business_id_fields": [
+        "order_id"
+      ],
+      "correlation_fields": [
+        "correlation_id"
+      ],
+      "identification_strategy": {
+        "id_type": "raw_token",
+        "expected_format": "Raw Custom Token",
+        "validation_regex": "^[A-Za-z0-9._:-]{2,}$",
+        "case_sensitive": false,
+        "query": "service:notifications AND (order_id:{business_id} OR correlation_id:{correlation_id})",
+        "correlation_extractor_regex": "(?i)(?:correlation[-_]?id|trace[-_]?id)[\\s>\"\\']*[:=]?[\\s]*[\"\\']?([a-z0-9._:-]{4,})"
+      }
     },
     "audit": {
       "display_name": "Audit Service",
       "source": "oracle",
       "table": "audit_logs",
-      "business_id_fields": ["order_id"],
-      "correlation_fields": ["correlation_id"],
-      "query": "SELECT event_time, level, message, correlation_id, actor FROM audit_logs WHERE order_id = :business_id ORDER BY event_time"
+      "business_id_fields": [
+        "order_id"
+      ],
+      "correlation_fields": [
+        "correlation_id"
+      ],
+      "identification_strategy": {
+        "id_type": "uuid",
+        "expected_format": "UUID v4",
+        "validation_regex": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+        "case_sensitive": false,
+        "query": "SELECT event_time, level, message, correlation_id, actor FROM audit_logs WHERE order_id = :business_id ORDER BY event_time",
+        "correlation_extractor_regex": "(?i)(?:correlation[-_]?id|actor[-_]?id)[\\s>\"\\']*[:=]?[\\s]*[\"\\']?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
+      }
     },
     "reconciliation": {
       "display_name": "Reconciliation Service",
       "source": "rabbitmq",
       "queue": "reconciliation.dlq",
-      "business_id_fields": ["order_id", "payload_id"],
-      "correlation_fields": ["correlation_id"],
-      "query": "queue:reconciliation.dlq business_id:{business_id}"
+      "business_id_fields": [
+        "order_id",
+        "payload_id"
+      ],
+      "correlation_fields": [
+        "correlation_id"
+      ],
+      "identification_strategy": {
+        "id_type": "context_id",
+        "expected_format": "Context ID (CTX- prefix)",
+        "validation_regex": "^CTX-[A-Z0-9]{8,}$",
+        "case_sensitive": false,
+        "query": "queue:reconciliation.dlq business_id:{business_id}",
+        "correlation_extractor_regex": "(?i)(?:correlation[-_]?id|context[-_]?id)[\\s>\"\\']*[:=]?[\\s]*[\"\\']?([a-z0-9._:-]{6,})"
+      }
     }
   }
 }

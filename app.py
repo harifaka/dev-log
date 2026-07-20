@@ -43,6 +43,14 @@ TRACE_EXECUTOR = ThreadPoolExecutor(max_workers=MAX_TRACE_WORKERS)
 SELECT_PATTERN = re.compile(r"^\s*SELECT\b", re.IGNORECASE)
 SQL_COMMENT_PATTERN = re.compile(r"(--|/\*|\*/|;)")
 PLACEHOLDER_PATTERN = re.compile(r"(?<!:):[A-Za-z_][A-Za-z0-9_]*|@[A-Za-z_][A-Za-z0-9_]*")
+# Strategy-aware placeholders resolved by the parametric query compiler.
+STRATEGY_QUERY_PLACEHOLDERS = {
+    ":business_id",
+    ":search_id_like",
+    ":correlation_id",
+}
+GRAYLOG_QUERY_PLACEHOLDERS = {"{business_id}", "{correlation_id}"}
+ALLOWED_ID_TYPES = {"strict_numeric", "uuid", "partial_match", "context_id", "raw_token"}
 
 
 class ConfigurationError(RuntimeError):
@@ -61,6 +69,9 @@ class RuntimeConfig:
     server: dict[str, Any]
     environments: dict[str, Any]
     services: list[dict[str, Any]]
+    allow_raw_regex_queries: bool = False
+    fallback_correlation_regex: str = ""
+    legacy_business_id_service: str = "gateway"
 
 
 DEFAULT_SERVICES = [
@@ -78,6 +89,9 @@ DEFAULT_RUNTIME = RuntimeConfig(
     environments={"safe-local": {"description": "Safe local fallback; connectors disabled.",
                                  "mock_data": True}},
     services=DEFAULT_SERVICES,
+    allow_raw_regex_queries=False,
+    fallback_correlation_regex="(?i)correlation[-_]?id[:=\\s]*['\"]?([a-z0-9._:-]{4,})['\"]?",
+    legacy_business_id_service="gateway",
 )
 DEFAULT_PROFILES = {
     service["id"]: {"display_name": service["name"], "source": "disabled"}
@@ -153,17 +167,16 @@ class OracleAdapter:
                 raise ConnectorError(f"Oracle connection unavailable: {exc}") from exc
         return self.pool
 
-    def query(self, query: str, business_id: str) -> list[dict[str, Any]]:
+    def query(self, query: str, parameters: tuple[Any, ...]) -> list[dict[str, Any]]:
+        """Run a sanitized SELECT using positional bound parameters."""
         safe_query = sanitize_select_query(query)
-        if ":business_id" not in safe_query:
-            raise ConnectorError("Oracle query must bind :business_id.")
 
         def operation():
             with self._get_pool().acquire() as connection:
                 with connection.cursor() as cursor:
                     connection.rollback()
                     cursor.execute("SET TRANSACTION READ ONLY")
-                    cursor.execute(safe_query, business_id=business_id)
+                    cursor.execute(safe_query, parameters)
                     columns = [item[0].lower() for item in cursor.description or ()]
                     return [_row_to_dict(columns, row) for row in cursor.fetchmany(MAX_TRACE_RESULTS)]
 
@@ -261,15 +274,9 @@ class MSSQLAdapter:
         finally:
             self._release(connection)
 
-    def query(self, query: str, business_id: str) -> list[dict[str, Any]]:
+    def query(self, query: str, parameters: tuple[Any, ...]) -> list[dict[str, Any]]:
         validated_query = sanitize_select_query(query)
-        parameter_matches = re.findall(r"(?<![A-Za-z0-9_])@business_id\b", validated_query)
-        if not parameter_matches:
-            raise ConnectorError("MSSQL query must bind @business_id.")
-        safe_query = re.sub(r"(?<![A-Za-z0-9_])@business_id\b", "?", validated_query)
-        return _bounded_call(
-            lambda: self._execute(safe_query, (business_id,) * len(parameter_matches))
-        )
+        return _bounded_call(lambda: self._execute(validated_query, parameters))
 
     def schema(self, table: str) -> list[str]:
         if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", table):
@@ -294,7 +301,12 @@ class GraylogClient:
         try:
             import requests
             from requests.auth import HTTPBasicAuth
-            if not re.fullmatch(r"[A-Za-z0-9_:\s(){}./-]+", query):
+            # Allow Graylog/Lucene field names, quoted phrases, ranges, booleans, and wildcards.
+            # This intentionally permits quotes, ampersands, pipes, etc. because the query is a
+            # template produced by the operator, not raw user input; user identifiers are escaped
+            # below before being substituted into the template.  Newlines, backslashes, and any
+            # other characters are rejected to keep the query context predictable.
+            if not re.fullmatch(r"[A-Za-z0-9_:\s(){}./\[\]@+\-&|!^=\"']+", query):
                 raise ConnectorError("Graylog query profile contains unsupported syntax.")
             safe_business_id = self._escape_query_value(business_id)
             safe_correlation_id = self._escape_query_value(correlation_id or business_id)
@@ -349,7 +361,13 @@ class RabbitMQInspector:
     def __init__(self, settings: dict[str, Any]):
         self.settings = settings
 
-    def inspect(self, queue: str, business_id: str) -> list[dict[str, Any]]:
+    def inspect(
+        self,
+        queue: str,
+        business_id: str,
+        profile: dict[str, Any] | None = None,
+        fallback_correlation_regex: str = "",
+    ) -> list[dict[str, Any]]:
         if not re.fullmatch(r"[A-Za-z0-9_.:/-]+", queue):
             raise ConnectorError("Invalid RabbitMQ queue name.")
 
@@ -380,22 +398,29 @@ class RabbitMQInspector:
                         payload = json.loads(text)
                     except json.JSONDecodeError:
                         payload = {"payload": text}
-                    if isinstance(payload, dict):
-                        payload_text = json.dumps(payload, default=str)
-                        matches = business_id in payload_text
-                    else:
-                        matches = business_id in text
-                    if not matches:
+                    payload_text = json.dumps(payload, default=str) if isinstance(payload, dict) else text
+                    # Template-driven matching: substring for legacy scans plus
+                    # configurable correlation extraction for the event timeline.
+                    matches = business_id in payload_text
+                    correlation_id = None
+                    if profile:
+                        correlation_id = extract_correlation_id(payload, profile, fallback_correlation_regex)
+                    if not matches and not correlation_id:
                         continue
                     events.append({
                         "timestamp": None,
                         "level": "INFO",
                         "message": "Matching RabbitMQ DLQ payload sampled.",
                         "source": "rabbitmq",
-                        "fields": {"queue": queue, "payload": payload, "properties": {
-                            "content_type": getattr(properties, "content_type", None),
-                            "message_id": getattr(properties, "message_id", None),
-                        }},
+                        "fields": {
+                            "queue": queue,
+                            "payload": payload,
+                            "correlation_id": correlation_id,
+                            "properties": {
+                                "content_type": getattr(properties, "content_type", None),
+                                "message_id": getattr(properties, "message_id", None),
+                            },
+                        },
                     })
                 return events
             finally:
@@ -474,7 +499,14 @@ def load_runtime_config() -> RuntimeConfig:
         )
     if not isinstance(services, list) or not all(isinstance(item, dict) for item in services):
         raise ConfigurationError("config.json 'services' must be an array of objects.")
-    return RuntimeConfig(active, server, environments, services)
+    allow_raw = bool(document.get("allow_raw_regex_queries", False))
+    fallback_regex = str(
+        document.get("fallback_correlation_regex") or DEFAULT_RUNTIME.fallback_correlation_regex
+    )
+    legacy_service = str(
+        document.get("legacy_business_id_service") or DEFAULT_RUNTIME.legacy_business_id_service
+    )
+    return RuntimeConfig(active, server, environments, services, allow_raw, fallback_regex, legacy_service)
 
 
 def load_query_profiles() -> dict[str, dict[str, Any]]:
@@ -482,7 +514,178 @@ def load_query_profiles() -> dict[str, dict[str, Any]]:
     profiles = document.get("services") if isinstance(document, dict) else None
     if not isinstance(profiles, dict):
         raise ConfigurationError("query_templates.json must define a 'services' object.")
-    return {key: value for key, value in profiles.items() if isinstance(value, dict)}
+    loaded = {key: value for key, value in profiles.items() if isinstance(value, dict)}
+    for service_id, profile in loaded.items():
+        strategy = profile.get("identification_strategy")
+        if not isinstance(strategy, dict):
+            raise ConfigurationError(
+                f"Service '{service_id}' must define an 'identification_strategy' object."
+            )
+        if strategy.get("id_type") not in ALLOWED_ID_TYPES:
+            raise ConfigurationError(
+                f"Service '{service_id}' identification_strategy.id_type must be one of "
+                f"{sorted(ALLOWED_ID_TYPES)}."
+            )
+        for required in ("validation_regex", "expected_format", "query"):
+            if not strategy.get(required):
+                raise ConfigurationError(
+                    f"Service '{service_id}' identification_strategy must define '{required}'."
+                )
+    return loaded
+
+
+def _escape_like_pattern(value: str) -> str:
+    """Escape LIKE wildcards and return a safe padded pattern.
+
+    Backslash is escaped first so literal backslashes in the input are
+    preserved and do not accidentally escape the subsequent '%' and '_'
+    escapes.  Each remaining '%'/'_' is turned into a literal character by
+    prefixing it with a backslash, which the ESCAPE '\\' clause interprets.
+
+    Example:
+        _escape_like_pattern("test_100%") -> "%test\\_100\\%%"
+    """
+    # Escape backslash first so the subsequent '%' and '_' escapes are not themselves escaped.
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def compile_strategy_query(
+    profile: dict[str, Any], search_id: str, correlation_id: str | None
+) -> tuple[str, tuple[Any, ...]]:
+    """Return a parameterized SQL query and a positional parameter tuple.
+
+    The identification_strategy.query template may contain:
+      - :business_id / @business_id / :correlation_id for SQL-like sources
+      - :search_id_like for LIKE-safe partial matching
+    Placeholders are replaced positionally so the returned tuple matches the
+    order of the '?' placeholders in the compiled query.
+    """
+    strategy = profile.get("identification_strategy", {})
+    query_template = str(strategy.get("query", ""))
+    source = profile.get("source")
+
+    like_value = _escape_like_pattern(search_id)
+    safe_correlation = str(correlation_id) if correlation_id else search_id
+
+    if source in {"oracle", "mssql"}:
+        substitutions: list[tuple[str, Any]] = [
+            (":search_id_like", like_value),
+            ("@search_id_like", like_value),
+            (":business_id", search_id),
+            ("@business_id", search_id),
+            (":correlation_id", safe_correlation),
+            ("@correlation_id", safe_correlation),
+        ]
+        safe_query = query_template
+        params: list[Any] = []
+        for old, value in substitutions:
+            while old in safe_query:
+                safe_query = safe_query.replace(old, "?", 1)
+                params.append(value)
+        return safe_query, tuple(params)
+
+    if source == "graylog":
+        return (
+            query_template.replace("{business_id}", search_id).replace(
+                "{correlation_id}", safe_correlation
+            ),
+            (),
+        )
+
+    if source == "rabbitmq":
+        return query_template.replace("{business_id}", search_id), ()
+
+    raise ConnectorError(f"Unsupported source '{source}' for query compilation.")
+
+
+def validate_search_id(service_id: str, profile: dict[str, Any], search_id: str, allow_raw_regex: bool) -> tuple[bool, str]:
+    """Validate a user-supplied identifier against the service strategy.
+
+    When allow_raw_regex is enabled in config.json, advanced users may enter a
+    raw Regular Expression; otherwise the value must match the configured
+    validation_regex.  Returns (ok, human_message).
+    """
+    if not isinstance(search_id, str) or not search_id:
+        return False, "Search identifier is required."
+    if len(search_id) > MAX_BUSINESS_ID_LENGTH:
+        return False, f"Search identifier must not exceed {MAX_BUSINESS_ID_LENGTH} characters."
+    strategy = profile.get("identification_strategy", {})
+    if allow_raw_regex:
+        try:
+            re.compile(search_id)
+        except re.error as exc:
+            return False, "Invalid regular expression syntax."
+        return True, ""
+    pattern = str(strategy.get("validation_regex", ""))
+    case_sensitive = bool(strategy.get("case_sensitive", False))
+    flags = 0 if case_sensitive else re.IGNORECASE
+    try:
+        compiled = re.compile(pattern, flags)
+    except re.error as exc:
+        LOGGER.warning("Invalid validation_regex for %s: %s", service_id, exc)
+        return False, "Service validation rule is misconfigured."
+    if not compiled.fullmatch(search_id):
+        expected = str(strategy.get("expected_format", "the expected format"))
+        return False, f"Input does not match expected format: {expected}."
+    return True, ""
+
+
+def compile_correlation_regex(pattern: str, case_sensitive: bool | None) -> re.Pattern[str]:
+    """Compile a correlation extractor regex with sane defaults."""
+    flags = 0
+    if not case_sensitive:
+        flags |= re.IGNORECASE
+    # Allow operators to embed flags directly in the pattern string (e.g. (?i)...).
+    return re.compile(pattern, flags)
+
+
+def extract_correlation_id(
+    payload: Any,
+    profile: dict[str, Any],
+    fallback_regex: str,
+) -> str | None:
+    """Extract the first correlation token from a raw string, XML, or JSON dump.
+
+    Uses the service-specific correlation_extractor_regex when present, otherwise
+    the global fallback_correlation_regex from config.json.  Matching is case-
+    insensitive by default and works across raw text, XML attributes, and JSON
+    string values.
+    """
+    strategy = profile.get("identification_strategy", {})
+    pattern = str(strategy.get("correlation_extractor_regex") or fallback_regex)
+    case_sensitive = bool(strategy.get("case_sensitive", False))
+    try:
+        compiled = compile_correlation_regex(pattern, case_sensitive)
+    except re.error as exc:
+        LOGGER.warning("Invalid correlation_extractor_regex for %s: %s", profile.get("display_name"), exc)
+        return None
+
+    if isinstance(payload, bytes):
+        text = payload.decode("utf-8", errors="replace")
+    elif isinstance(payload, str):
+        text = payload
+    elif isinstance(payload, (dict, list, tuple)):
+        text = json.dumps(payload, default=str, ensure_ascii=False)
+    else:
+        text = str(payload)
+
+    match = compiled.search(text)
+    service_label = str(profile.get("display_name") or profile.get("id") or "unknown")
+    # lastindex is the index of the last matched capturing group, or None if no
+    # group participated.  Group 1 is the first capturing group, so a truthy
+    # lastindex guarantees match.group(1) is valid.
+    if match and match.lastindex:
+        return match.group(1)
+    if match:
+        # The regex matched but has no capturing group; return the whole match
+        # so callers still get a token, but operators should prefer patterns
+        # with a capture group for cleaner results.
+        LOGGER.warning(
+            "correlation_extractor_regex for %s matched without a capture group", service_label
+        )
+        return match.group(0)
+    return None
 
 
 def _warning(service_id: str, message: str, **metadata: Any) -> dict[str, Any]:
@@ -530,30 +733,32 @@ def _run_profile(
     service_id: str,
     profile: dict[str, Any],
     environment: dict[str, Any],
-    business_id: str,
+    search_id: str,
     correlation_id: str | None,
     connector_cache: dict[str, Any] | None = None,
+    fallback_correlation_regex: str = "",
 ) -> list[dict[str, Any]]:
     source = profile.get("source")
     try:
         connector = _connector_for(str(source), environment, connector_cache)
         if connector is None:
             return [_warning(service_id, f"{source} connector is disabled.", skipped=True)]
+        compiled_query, params = compile_strategy_query(profile, search_id, correlation_id)
         if source in {"oracle", "mssql"}:
             return [
                 {**event, "service": service_id}
-                for event in connector.query(str(profile.get("query", "")), business_id)
+                for event in connector.query(compiled_query, params)
             ]
         if source == "graylog":
             return [
                 {**event, "service": service_id}
-                for event in connector.search(str(profile.get("query", "")), business_id, correlation_id)
+                for event in connector.search(str(profile.get("query", "")), search_id, correlation_id)
             ]
         if source == "rabbitmq":
             queue = str(profile.get("queue", ""))
             return [
                 {**event, "service": service_id}
-                for event in connector.inspect(queue, business_id)
+                for event in connector.inspect(queue, search_id, profile, fallback_correlation_regex)
             ]
         return [_warning(service_id, f"Unsupported source '{source}'.")]
     except Exception as exc:
@@ -639,22 +844,50 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
                 "warning": "Schema reflection unavailable; see application logs for details.",
             })
 
+    @app.get("/api/strategy/<service_id>")
+    def service_strategy(service_id: str):
+        """Return the identification strategy for a service so the UI can adapt."""
+        profile = profiles.get(service_id)
+        if not profile:
+            return jsonify({"error": "Unknown service profile."}), 404
+        strategy = profile.get("identification_strategy", {})
+        return jsonify({
+            "service": service_id,
+            "id_type": strategy.get("id_type"),
+            "expected_format": strategy.get("expected_format"),
+            "validation_regex": strategy.get("validation_regex"),
+            "case_sensitive": strategy.get("case_sensitive", False),
+            "allow_raw_regex_queries": runtime.allow_raw_regex_queries,
+        })
+
     @app.post("/api/trace/execute")
     def execute_trace():
         payload = request.get_json(silent=True) or {}
-        business_id = str(payload.get("business_id", "")).strip()
-        if not re.fullmatch(
-            rf"[A-Za-z0-9._-]{{1,{MAX_BUSINESS_ID_LENGTH}}}",
-            business_id,
-        ):
-            return jsonify({
-                "error": "business_id must contain only letters, numbers, '.', '_', or '-'.",
-            }), 400
-        selected = payload.get("services")
-        service_ids = (
-            [item for item in selected if isinstance(item, str) and item in profiles]
-            if isinstance(selected, list) else list(profiles)
+        requested_service = str(payload.get("service", "")).strip()
+        search_id = str(payload.get("search_id", "")).strip()
+
+        # If the legacy business_id field is sent, map it to the configured
+        # legacy service (default "gateway") to preserve backwards compatibility
+        # with older clients.  Operators can change the target service via
+        # config.json "legacy_business_id_service".
+        legacy_business_id = str(payload.get("business_id", "")).strip()
+        if not requested_service and legacy_business_id:
+            legacy_service = runtime.legacy_business_id_service
+            if legacy_service not in profiles:
+                return jsonify({"error": "Legacy business_id mapping unavailable."}), 400
+            requested_service = legacy_service
+            search_id = legacy_business_id
+
+        profile = profiles.get(requested_service)
+        if not profile:
+            return jsonify({"error": "Unknown or missing service selection."}), 400
+
+        ok, message = validate_search_id(
+            requested_service, profile, search_id, runtime.allow_raw_regex_queries
         )
+        if not ok:
+            return jsonify({"error": message}), 400
+
         requested_env = payload.get("environment")
         env_name = (
             requested_env
@@ -664,10 +897,12 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
         environment = runtime.environments[env_name]
         correlation_id = payload.get("correlation_id")
         timeline: list[dict[str, Any]] = []
+        service_ids = [requested_service]
         futures = {
             TRACE_EXECUTOR.submit(
                 _run_profile, service_id, profiles[service_id], environment,
-                business_id, str(correlation_id) if correlation_id else None, connector_cache,
+                search_id, str(correlation_id) if correlation_id else None,
+                connector_cache, runtime.fallback_correlation_regex,
             ): service_id
             for service_id in service_ids
         }
@@ -684,7 +919,8 @@ def create_app(configuration: RuntimeConfig | None = None) -> Flask:
         ))
         return jsonify({
             "environment": env_name,
-            "business_id": business_id,
+            "service": requested_service,
+            "search_id": search_id,
             "events": timeline[:MAX_TRACE_RESULTS],
             "warnings": [event for event in timeline if event.get("level") == "WARNING"],
             "node_status": {
